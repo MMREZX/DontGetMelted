@@ -4,6 +4,7 @@ export const CAMP_JOBS = {
   forage: { name: 'Forage', description: 'Bring back Timber and a Fizz Berry.' },
   tend: { name: 'Tend plots', description: 'Advance every planted crop within 280 units of camp.' },
   watch: { name: 'Keep watch', description: 'Reduce weather pressure around camp through the night.' },
+  relay: { name: 'Supply Relay', description: 'The restored Waterwheel supports a supply shift yielding 3 Timber and 2 berries.' },
 };
 
 export type CampJob = keyof typeof CAMP_JOBS;
@@ -88,6 +89,10 @@ export function resolveCampShift(
       const growth = conditions.hasRelay ? 14 : 9;
       effects.cropGrowth += growth;
       next.report.push(`${companion.name} tended the camp plots.`);
+    } else if (job === 'relay') {
+      effects.timber += 3;
+      effects.berries += 2;
+      next.report.push(`${companion.name} brought in a Waterwheel supply crate with 3 Timber and 2 Fizz Berries.`);
     } else {
       next.wardDay = day;
       next.report.push(`${companion.name} is watching the lamp through the night.`);

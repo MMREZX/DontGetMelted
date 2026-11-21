@@ -1,5 +1,18 @@
 import { DEFAULT_AUDIO_SETTINGS } from './save';
+import { AudioMixer, getVoicePeak, SILENCE } from './audioMixer';
+import type { AudioChannel } from './audioMixer';
+import { FieldScore } from './fieldScore';
 import type { AudioSettings, BiomeId, CharacterId, TripId } from './types';
+
+export type CueCategory = 'fish' | 'tool' | 'wind' | 'bell' | 'warning';
+
+export interface AudioCueEvent {
+  id: string;
+  worldPos: { x: number; y: number } | null;
+  category: CueCategory;
+  urgency: 'normal' | 'urgent';
+  channel: AudioChannel;
+}
 
 function jitter(base: number, pct = 0.06): number {
   return base * (1 + (Math.random() * 2 - 1) * pct);
@@ -7,8 +20,17 @@ function jitter(base: number, pct = 0.06): number {
 
 export class FunkAudio {
   private ctx: AudioContext | null = null;
+  private pendingResume: Promise<void> | null = null;
+  private mixer: AudioMixer | null = null;
+  private score: FieldScore | null = null;
+  private mixId = '';
+  private suspendTimer: ReturnType<typeof setTimeout> | undefined;
+  private paused = false;
+  private hidden = false;
+  private readonly debug = new URLSearchParams(window.location.search).get('audioDebug') === '1';
+  private debugElapsed = 0;
   private pendingNotes = new Set<ReturnType<typeof setTimeout>>();
-  public settings: AudioSettings = { ...DEFAULT_AUDIO_SETTINGS };
+  private settings: AudioSettings = { ...DEFAULT_AUDIO_SETTINGS };
   private beatTimer = 0;
   private ambTimer = 0;
   private heartbeatTimer = 0;
@@ -19,27 +41,113 @@ export class FunkAudio {
   private readonly bassNotes = [110, 110, 130.81, 146.83, 164.81, 146.83, 130.81, 98.0];
   private readonly arpNotes = [261.63, 329.63, 392.0, 493.88, 523.25, 392.0];
 
-  public get muted(): boolean {
-    return this.settings.muted;
-  }
-
-  public set muted(val: boolean) {
-    this.settings.muted = val;
-  }
+  constructor(private readonly onCue: (event: AudioCueEvent) => void) {}
 
   public applySettings(next: AudioSettings): void {
     this.settings = { ...next };
+    this.mixer?.apply(this.settings, this.paused, this.hidden);
+  }
+
+  public cue(
+    id: string,
+    category: CueCategory,
+    worldPos: AudioCueEvent['worldPos'] = null,
+    channel: AudioChannel = 'effects',
+    urgency: AudioCueEvent['urgency'] = 'normal',
+  ): void {
+    if (urgency === 'urgent' && !this.hidden) this.mixer?.duckForCue(this.settings, this.paused, false);
+    if (!this.hidden) this.onCue({ id, category, worldPos, channel, urgency });
+  }
+
+  public setPerceptionMix(
+    weights: { calm: number; focus: number; echo: number; warning: number },
+    cadenceOffset: number, squall: boolean, landmark: boolean,
+  ): void {
+    const calm = Math.round(weights.calm * 8) / 8;
+    const tension = Math.min(1, Math.round((weights.warning + weights.echo * 0.48) * 8) / 8);
+    const hollow = Math.min(1, Math.round(weights.warning * 10) / 10);
+    const cadence = Math.round(cadenceOffset * 100) / 100;
+    const id = `${calm}/${tension}/${hollow}/${landmark}/${cadence}/${squall}`;
+    if (this.mixId === id) return;
+    this.mixId = id;
+    this.mixer?.color(calm, hollow);
+    this.score?.mix(calm, tension, landmark, squall, cadence);
+  }
+
+  public landmarkChime(id: string): void {
+    const chroma = id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4;
+    const hz = [293.66, 349.23, 392, 440][chroma];
+    this.tone(hz, 0.34, 'sine', 0.07, undefined, 'music');
+    this.scheduleNote(() => this.tone(hz * 1.5, 0.52, 'triangle', 0.06, undefined, 'music'), 160);
+  }
+
+  public setPaused(paused: boolean): void {
+    if (paused === this.paused) return;
+    this.paused = paused;
+    if (paused) this.clearNotes();
+    this.mixer?.apply(this.settings, paused, this.hidden);
+  }
+
+  public setHidden(hidden: boolean): void {
+    if (hidden === this.hidden) return;
+    this.hidden = hidden;
+    clearTimeout(this.suspendTimer);
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    if (hidden) {
+      this.clearNotes();
+      this.score?.flushNotes();
+      this.mixer?.apply(this.settings, this.paused, true, 0.008);
+      this.suspendTimer = setTimeout(() => {
+        if (this.hidden && this.ctx === ctx) {
+          void ctx.suspend().then(() => {
+            if (!this.hidden && this.ctx === ctx) this.unlock();
+          }).catch(() => {});
+        }
+      }, 35);
+    } else {
+      this.unlock();
+      this.mixer?.apply(this.settings, this.paused, false, 0.04);
+    }
+  }
+
+  public measure(dt: number): void {
+    if (!this.debug || this.ctx?.state !== 'running' || !this.mixer || this.hidden) return;
+    const stats = this.mixer.measure(dt);
+    this.debugElapsed += dt;
+    if (this.debugElapsed >= 1) {
+      this.debugElapsed = 0;
+      console.info('[audio peak]', stats);
+    }
   }
 
   public unlock(): void {
+    if (this.hidden) return;
     try {
       if (!this.ctx) {
         const AC =
           window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        if (AC) this.ctx = new AC();
+        if (!AC) return;
+        const context = new AC();
+        try {
+          const mixer = new AudioMixer(context, context.destination, this.settings);
+          const score = new FieldScore(context, mixer.channels.music, mixer.channels.ambience);
+          mixer.apply(this.settings, this.paused, false);
+          this.ctx = context;
+          this.mixer = mixer;
+          this.score = score;
+          this.mixId = '';
+        } catch {
+          void context.close().catch(() => {});
+          return;
+        }
       }
-      if (this.ctx && this.ctx.state === 'suspended') {
-        void this.ctx.resume().catch(() => {});
+      const activated = navigator.userActivation?.isActive;
+      if (this.ctx.state !== 'running' && this.ctx.state !== 'closed' && (!this.pendingResume || activated)) {
+        const resume = this.ctx.resume().catch(() => {}).finally(() => {
+          if (this.pendingResume === resume) this.pendingResume = null;
+        });
+        this.pendingResume = resume;
       }
     } catch {
       // Ignore audio unlock errors in headless browsers
@@ -54,9 +162,15 @@ export class FunkAudio {
     this.pendingNotes.add(timer);
   }
 
-  public reset(): void {
+  private clearNotes(): void {
     for (const timer of this.pendingNotes) clearTimeout(timer);
     this.pendingNotes.clear();
+  }
+
+  public reset(): void {
+    this.clearNotes();
+    this.score?.flushNotes();
+    this.mixId = '';
     this.beatTimer = 0;
     this.ambTimer = 0;
     this.heartbeatTimer = 0;
@@ -67,13 +181,13 @@ export class FunkAudio {
 
   public destroy(): void {
     this.reset();
+    clearTimeout(this.suspendTimer);
+    this.score?.destroy();
     if (this.ctx) void this.ctx.close().catch(() => {});
     this.ctx = null;
-  }
-
-  private channelGain(channel: 'music' | 'ambience' | 'effects'): number {
-    if (this.settings.muted) return 0;
-    return Math.max(0, Math.min(1, this.settings[channel]));
+    this.pendingResume = null;
+    this.mixer = null;
+    this.score = null;
   }
 
   public tone(
@@ -82,25 +196,36 @@ export class FunkAudio {
     type: OscillatorType = 'triangle',
     vol = 0.11,
     slideTo?: number,
-    channel: 'music' | 'ambience' | 'effects' = 'effects',
+    channel: AudioChannel = 'effects',
   ): void {
-    const chVol = this.channelGain(channel);
-    if (chVol <= 0.001 || !this.ctx || this.ctx.state !== 'running') return;
+    if (this.hidden || this.settings.muted || this.settings.master <= SILENCE || this.settings[channel] <= SILENCE) return;
+    const context = this.ctx;
+    if (!context || !this.mixer) return;
+    if (context.state !== 'running') {
+      const requestedAt = performance.now();
+      void this.pendingResume?.then(() => {
+        if (this.ctx === context && context.state === 'running' && performance.now() - requestedAt < 300) {
+          this.tone(freq, dur, type, vol, slideTo, channel);
+        }
+      });
+      return;
+    }
     try {
-      const t = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
+      const t = context.currentTime;
+      const osc = context.createOscillator();
+      const gain = context.createGain();
       osc.type = type;
       osc.frequency.setValueAtTime(Math.max(30, freq), t);
       if (slideTo !== undefined) {
         osc.frequency.exponentialRampToValueAtTime(Math.max(30, slideTo), t + dur);
       }
-      const peak = vol * chVol;
+      const peak = getVoicePeak(vol, channel);
       gain.gain.setValueAtTime(0.0008, t);
       gain.gain.linearRampToValueAtTime(peak, t + Math.min(0.015, dur * 0.2));
       gain.gain.exponentialRampToValueAtTime(0.0006, t + dur);
       osc.connect(gain);
-      gain.connect(this.ctx.destination);
+      gain.connect(this.mixer.channels[channel]);
+      osc.onended = () => { osc.disconnect(); gain.disconnect(); };
       osc.start(t);
       osc.stop(t + dur + 0.012);
     } catch {
@@ -202,6 +327,7 @@ export class FunkAudio {
 
   public dryerKnock(): void {
     // Unpaired Sea double dryer knock warning before wind gusts shift
+    this.cue('Gust warning', 'wind', null, 'ambience', 'urgent');
     this.tone(145, 0.07, 'triangle', 0.12, 86, 'ambience');
     this.scheduleNote(() => this.tone(152, 0.07, 'triangle', 0.12, 84, 'ambience'), 175);
   }
@@ -335,7 +461,11 @@ export class FunkAudio {
       dominantTrip?: TripId | null;
     },
   ): void {
-    if (this.settings.muted || !this.ctx || this.ctx.state !== 'running') return;
+    const dryerWarn = biomeId === 'unpaired_sea' && opts.dryerKnockWarning;
+    if (dryerWarn && !this.lastDryerWarn) this.dryerKnock();
+    this.lastDryerWarn = dryerWarn;
+    if (this.hidden || this.paused || this.settings.muted || !this.ctx || this.ctx.state !== 'running') return;
+    if (this.settings.master > 0 && (this.settings.music > 0 || this.settings.ambience > 0)) this.score?.tick();
     const bad = opts.badTripIntensity ?? 0;
 
     // Bad Trip pounding heartbeat + uneasy detuned shimmer
@@ -355,12 +485,6 @@ export class FunkAudio {
         this.leadStep('barnaby', true);
       }
     }
-
-    // Trigger dryer double-knock right on rising edge of Unpaired Sea warning
-    if (biomeId === 'unpaired_sea' && opts.dryerKnockWarning && !this.lastDryerWarn) {
-      this.dryerKnock();
-    }
-    this.lastDryerWarn = biomeId === 'unpaired_sea' && opts.dryerKnockWarning;
 
     // Regional musical pulse
     const tempo = isChrono

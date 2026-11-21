@@ -53,6 +53,16 @@ export const FISH_DEFS: Record<FishId, FishDef> = {
     reelSpeed: 34,
     biteWindow: 2.1,
   },
+  reed_perch: {
+    id: 'reed_perch',
+    name: 'Reed Perch',
+    habitat: 'Sunlit reeds and shaded willows at the Singing Millpond',
+    behavior: 'Bites faster in sunlit water and uses two small tugs before diving.',
+    accent: '#72efdd',
+    pullStrength: 28,
+    reelSpeed: 48,
+    biteWindow: 2.5,
+  },
 };
 
 export interface DockReflectionState {
@@ -144,16 +154,19 @@ export function startFishingCast(
     currentReaderPerk: boolean;
     stillwaterPerk: boolean;
     brinBonus?: boolean;
+    millpond?: { waterX: number; waterY: number; shaded: boolean };
   },
 ): FishingSession {
-  const spot = DOCK_LAMP_SLOTS[castSlot] || DOCK_LAMP_SLOTS[1];
-  const inReflection = castSlot === dockLampSlot && reflectionIntegrity >= 0.55;
+  const spot = opts.millpond ?? DOCK_LAMP_SLOTS[castSlot] ?? DOCK_LAMP_SLOTS[1];
+  const inReflection = !opts.millpond && castSlot === dockLampSlot && reflectionIntegrity >= 0.55;
 
   // Deterministic, learnable species choice:
   // Casting into the intact Movable Dock Lamp reflection targets the Mirror Minnow!
   // Casting away from the lamp targets the reliable Spool Perch (or Receipt Eel with Prism Reel on East Cove).
   let targetFish: FishId = 'spool_perch';
-  if (inReflection) {
+  if (opts.millpond) {
+    targetFish = 'reed_perch';
+  } else if (inReflection) {
     targetFish = 'mirror_minnow';
   } else if (opts.usingPrismReel && castSlot === 2 && opts.hasBellLure) {
     targetFish = 'receipt_eel';
@@ -183,6 +196,8 @@ export function startFishingCast(
     rewardCommitted: false,
     lastOutcome: '',
     lastFishName: fish.name,
+    shadedBank: opts.millpond?.shaded,
+    steadyReflection: !opts.millpond && opts.stillwaterPerk,
   };
 }
 
@@ -221,7 +236,7 @@ export function stepFishingSession(
     if (next.phaseTimer <= 0) {
       next.phase = 'waiting';
       // Brisk, welcoming wait so opening isn't spent staring at water
-      next.phaseTimer = opts.hasBellLure ? 1.15 : 1.55;
+      next.phaseTimer = next.targetFish === 'reed_perch' ? (next.shadedBank ? 2.45 : 0.9) : opts.hasBellLure ? 1.15 : 1.55;
       events.bobberSplashed = true;
     }
     return { next, events };
@@ -231,7 +246,7 @@ export function stepFishingSession(
   if (
     next.targetFish === 'mirror_minnow' &&
     (next.phase === 'waiting' || next.phase === 'nibble_1' || next.phase === 'nibble_2') &&
-    opts.reflectionIntegrity < 0.45
+    opts.reflectionIntegrity < (next.steadyReflection ? 0.3 : 0.45)
   ) {
     next.phase = 'waiting';
     next.phaseTimer = Math.max(next.phaseTimer, 0.8);

@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "assetId": "AST-ENV-01",
+      "filePath": "public/assets/textures/paper_tooth_512.webp",
+      "originType": "ai-generated",
+      "toolOrAuthor": "OpenAI built-in image generation",
+      "promptHashOrSourceUrl": "Production game texture, 1:1 square. Close scan of warm ivory unmarked cold-press watercolor paper tooth, even lighting and extremely subtle low contrast fibers and grain (under 8% luminance variation). Uniform texture with no edges, folds, seams, shading gradients or visible shapes. Designed to repeat seamlessly. No text or background objects.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-VFX-02",
+      "filePath": "public/assets/vfx/bramble_frame_1280.webp",
+      "originType": "ai-generated",
+      "toolOrAuthor": "OpenAI built-in image generation",
+      "promptHashOrSourceUrl": "Game compositing mask on true alpha background, landscape 16:9. Fine antique dark sepia dip-pen brambles and dry brush crosshatched thorns precisely confined to the outer 13–17% edges and corners of the rectangular frame. Central 68% region fully empty alpha, sparse feathering inward. Monochrome dark charcoal plum ink, no other colors, no wash, no text or UI. Hand-inked botanical field journal press.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-PRP-01",
+      "filePath": "public/assets/props/expedition_props.webp",
+      "originType": "ai-generated",
+      "toolOrAuthor": "OpenAI built-in image generation",
+      "promptHashOrSourceUrl": "Original top-down browser survival RPG props sprite sheet on true transparent alpha. Four equally spaced individually silhouetted props in 2x2 grid, with generous cell gutters and no overlapping: upper left slender wooden trail stake tied with pale linen ribbon, upper right crooked small amber lantern on wrought iron pole, lower left cool mint cluster of serrated green leaves, lower right pale rose chalk quartz cluster. Warm muted watercolor, dark plum dip-pen outlines, cozy surreal field-journal illustration, match 2D action adventure stylization. No labels, shadows outside objects, boxes, or letters.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-ENV-02",
+      "filePath": "public/assets/env/ground_washes_atlas.webp",
+      "originType": "ai-generated",
+      "toolOrAuthor": "OpenAI built-in image generation",
+      "promptHashOrSourceUrl": "Production watercolor sprite atlas on actual transparent alpha, square 2-by-2 with wide empty gutters. Four separate irregular elliptical top-down patches of extremely subtle organic watercolor pigment and cold press grain with feathered transparent edges: upper left riverbank olive sage reeds and wet ground, upper right restored pale golden green aquatic meadow, lower left dry dusty pink chalk canyon and uneven pale ridges, lower right restored muted rose and mossy ochre. Antiques style muted original dip-pen botanical field-journal, no labels, no illustrated objects, no solid backgrounds.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-CRT-01",
+      "filePath": "public/assets/creatures/field_fauna.webp",
+      "originType": "ai-generated",
+      "toolOrAuthor": "OpenAI built-in image generation",
+      "promptHashOrSourceUrl": "Transparent 2-by-2 sprite sheet of four separate top-down slight isometric cozy watercolor pen-and-ink game sprites with broad padding. Upper left silver-turquoise Reed Perch with a tall reed-green dorsal fin, upper right pale yellow Meadow Moth with a fuzzy beige body, lower left stylized plum and rose Hollow Beetle, lower right pale cream field companion lantern moth with a travel supply roll. Consistent dark plum outline, limited watercolor color, original field guide illustration. No text or backgrounds.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-VFX-01-honeycomb",
+      "filePath": "public/assets/vfx/kluver_honeycomb_512.png",
+      "originType": "procedural-code",
+      "toolOrAuthor": "DON'T MELT! deterministic asset pipeline",
+      "promptHashOrSourceUrl": "Original geometrically repeating sepia honeycomb engraving",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-VFX-01-spiral",
+      "filePath": "public/assets/vfx/kluver_spiral_512.png",
+      "originType": "procedural-code",
+      "toolOrAuthor": "DON'T MELT! deterministic asset pipeline",
+      "promptHashOrSourceUrl": "Original geometrically repeating sepia spiral engraving",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-ENV-01-fallback",
+      "filePath": "public/assets/textures/paper_tooth_512.png",
+      "originType": "ai-generated",
+      "toolOrAuthor": "OpenAI built-in image generation",
+      "promptHashOrSourceUrl": "Production game texture, 1:1 square. Close scan of warm ivory unmarked cold-press watercolor paper tooth, even lighting and extremely subtle low contrast fibers and grain (under 8% luminance variation). Uniform texture with no edges, folds, seams, shading gradients or visible shapes. Designed to repeat seamlessly. No text or background objects.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-UI-01",
+      "filePath": "public/assets/ui/cue_icons.svg",
+      "originType": "procedural-code",
+      "toolOrAuthor": "DON'T MELT! project",
+      "promptHashOrSourceUrl": "Original light-ink glyphs for hook, tools, wind, bell, warning, shelter and mute.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-ANM-01",
+      "filePath": "src/game/perception.ts",
+      "originType": "procedural-code",
+      "toolOrAuthor": "DON'T MELT! project",
+      "promptHashOrSourceUrl": "Original analytic easing, pooled echo/ripple drawing and paper effects.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-MUS-01",
+      "filePath": "src/game/fieldScore.ts",
+      "originType": "procedural-code",
+      "toolOrAuthor": "DON'T MELT! project",
+      "promptHashOrSourceUrl": "Original procedural three-part D Dorian score, 96 BPM. See fieldScore.ts for notes, envelopes and transport.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-AMB-01",
+      "filePath": "src/game/fieldScore.ts",
+      "originType": "procedural-code",
+      "toolOrAuthor": "DON'T MELT! project",
+      "promptHashOrSourceUrl": "Original 30-second seamless calm and squall beds made from seeded filtered noise.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "AST-SFX-01",
+      "filePath": "src/game/audio.ts",
+      "originType": "procedural-code",
+      "toolOrAuthor": "DON'T MELT! project",
+      "promptHashOrSourceUrl": "Original Web Audio short cues and regional instruments made from oscillators.",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    },
+    {
+      "assetId": "TITLE-COVER",
+      "filePath": "src/assets/unmelted-county-cover.jpg",
+      "originType": "ai-generated",
+      "toolOrAuthor": "OpenAI built-in image generation",
+      "promptHashOrSourceUrl": "README.md#cover-illustration",
+      "license": "Original-Project-Owned",
+      "commercialRightsVerified": true,
+      "wcagChecked": true
+    }
+  ]
+}

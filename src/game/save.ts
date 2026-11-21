@@ -4,6 +4,7 @@ import {
 } from './data.ts';
 import { createInitialDisciplines, DISCIPLINES } from './disciplines.ts';
 import { CAMP_JOBS, createCampProgress, MAX_CAMP_PROVISIONS, RIBBON_TRAILS } from './fieldwork.ts';
+import { newExpeditions } from './expeditions.ts';
 import { TRIP_VISUAL_META } from './rules.ts';
 import { LANDMARKS, TRANSPORT_ROUTES } from './world.ts';
 import type {
@@ -19,7 +20,8 @@ import type {
   WorldFlags,
 } from './types.ts';
 
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 8;
+const SETTINGS_KEY = 'dont_melt_preferences';
 
 export const DEFAULT_WORLD_FLAGS: WorldFlags = {
   radioRepaired: false,
@@ -55,14 +57,67 @@ export const DEFAULT_WORLD_FLAGS: WorldFlags = {
 };
 
 export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
+  master: 1,
   music: 0.72,
   ambience: 0.68,
   effects: 0.85,
   muted: false,
-  effectStrength: 1.0,
-  flashFree: false,
+  perceptionIntensity: 0.75,
+  visualSoundCues: false,
+  flashFree: true,
   stableCamera: false,
 };
+
+export function normalizeAudioSettings(saved: unknown): AudioSettings {
+  const settings = restoreFields({ ...DEFAULT_AUDIO_SETTINGS }, saved);
+  if (isRecord(saved) && typeof saved.perceptionIntensity !== 'number') {
+    settings.perceptionIntensity = finite(saved.effectStrength, settings.perceptionIntensity);
+  }
+  for (const key of ['master', 'music', 'ambience', 'effects', 'perceptionIntensity'] as const) {
+    settings[key] = Math.max(0, Math.min(1, settings[key]));
+  }
+  return settings;
+}
+
+export function readPreferences(storage: Pick<Storage, 'getItem'>):
+  { audio: AudioSettings; motion: boolean | null } | null {
+  try {
+    const raw = JSON.parse(storage.getItem(SETTINGS_KEY) ?? 'null');
+    if (!isRecord(raw)) return null;
+    return {
+      audio: normalizeAudioSettings(raw.audio),
+      motion: typeof raw.motion === 'boolean' ? raw.motion : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readMotionOverride(saved: Record<string, unknown>): boolean | null {
+  if (typeof saved.reducedMotionOverride === 'boolean' || saved.reducedMotionOverride === null) {
+    return saved.reducedMotionOverride;
+  }
+  return typeof saved.reducedMotion === 'boolean' ? saved.reducedMotion : null;
+}
+
+export function readSavePreferences(storage: Pick<Storage, 'getItem'>):
+  { audio: AudioSettings; motion: boolean | null } | null {
+  try {
+    const raw = JSON.parse(readRawSavedJson(storage) ?? 'null');
+    if (!isRecord(raw) || !isRecord(raw.player)) return null;
+    return { audio: normalizeAudioSettings(raw.audioSettings), motion: readMotionOverride(raw) };
+  } catch {
+    return null;
+  }
+}
+
+export function writePreferences(storage: Pick<Storage, 'setItem'>, audio: AudioSettings, motion: boolean | null): void {
+  try {
+    storage.setItem(SETTINGS_KEY, JSON.stringify({ audio, motion }));
+  } catch {
+    // Settings still apply to the live game if storage is unavailable.
+  }
+}
 
 export function createInitialDiscoveries(): Record<string, DiscoveryState> {
   const map: Record<string, DiscoveryState> = {};
@@ -247,10 +302,8 @@ export function migrateSaveData(
     )),
   };
 
-  const audioSettings = restoreFields({ ...DEFAULT_AUDIO_SETTINGS }, src.audioSettings);
-  for (const key of ['music', 'ambience', 'effects', 'effectStrength'] as const) {
-    audioSettings[key] = Math.max(0, Math.min(1, audioSettings[key] ?? 1));
-  }
+  const audioSettings = normalizeAudioSettings(src.audioSettings);
+  const reducedMotionOverride = readMotionOverride(raw);
 
   // Merge disciplines cleanly (reconciling existing progress for v3/v4 saves!)
   const defaultDisc = createInitialDisciplines();
@@ -264,6 +317,8 @@ export function migrateSaveData(
           tier: ([1, 2, 3, 4, 5].includes(incoming.tier) ? incoming.tier : 1) as 1 | 2 | 3 | 4 | 5,
           perk: DISCIPLINES[k].perks.some((perk) => perk.id === incoming.perk) ? incoming.perk : null,
           distinctActions: Array.isArray(incoming.distinctActions) ? [...new Set(incoming.distinctActions.filter((action) => typeof action === 'string'))] : [],
+          ...(Number.isInteger(incoming.practiceDay) && Number(incoming.practiceDay) > 0 ?
+            { practiceDay: incoming.practiceDay, dailyActions: numericEntries(incoming.dailyActions) } : {}),
         };
       }
     }
@@ -304,9 +359,31 @@ export function migrateSaveData(
   }));
 
   // Preserve tamed buddies from v3/v4/v5 saves onto the refreshed creature roster
-  const creatures = restoreCreatures(src.creatures, base.creatures, src.version === SAVE_VERSION);
+  // Version 6 already persisted the full world roster.
+  const hasSavedWorld = (src.version ?? 0) >= 6;
+  const creatures = restoreCreatures(src.creatures, base.creatures, hasSavedWorld);
   const player = restoreFields(base.player, src.player);
   const camp = createCampProgress();
+  const expeditions = newExpeditions();
+  if (isRecord(src.expeditions)) {
+    const readStatus = (status: string) => status === 'active' || status === 'restored' ? status : 'unstarted';
+    expeditions.millpond = restoreFields(expeditions.millpond, src.expeditions.millpond);
+    expeditions.millpond.status = readStatus(expeditions.millpond.status);
+    expeditions.millpond.ribbons = Math.max(0, Math.min(3, expeditions.millpond.ribbons | 0));
+    expeditions.millpond.mint = Math.max(0, Math.min(3, expeditions.millpond.mint | 0));
+    expeditions.millpond.mintDay = Math.max(0, Math.floor(expeditions.millpond.mintDay));
+    expeditions.millpond.dailyMint = Math.max(0, Math.min(3, expeditions.millpond.dailyMint | 0));
+    expeditions.hollow = restoreFields(expeditions.hollow, src.expeditions.hollow);
+    expeditions.hollow.status = readStatus(expeditions.hollow.status);
+    expeditions.hollow.role = expeditions.hollow.role === 'hauler' ? 'hauler' : 'anchor';
+    expeditions.hollow.ribbons = Math.max(0, Math.min(7, expeditions.hollow.ribbons | 0));
+    expeditions.hollow.quartz = Math.max(0, Math.min(7, expeditions.hollow.quartz | 0));
+    expeditions.hollow.bankedQuartz = Math.max(0, Math.min(3, expeditions.hollow.bankedQuartz | 0));
+    expeditions.hollow.escortX = Math.max(-11600, Math.min(11600, expeditions.hollow.escortX));
+    expeditions.hollow.escortY = Math.max(-11600, Math.min(11600, expeditions.hollow.escortY));
+    expeditions.hollow.day = Math.max(0, Math.floor(expeditions.hollow.day));
+    expeditions.hollow.elapsed = Math.max(0, Math.min(180, expeditions.hollow.elapsed));
+  }
   if (isRecord(src.camp)) {
     camp.anchorId = typeof src.camp.anchorId === 'string' ? src.camp.anchorId : null;
     camp.provisions = Math.min(MAX_CAMP_PROVISIONS, Math.max(0, Math.floor(finite(src.camp.provisions, 0))));
@@ -329,6 +406,7 @@ export function migrateSaveData(
   const migrated: GameState = {
     ...base,
     camp,
+    expeditions,
     version: SAVE_VERSION,
     worldSeed: seed,
     time: Math.max(0, finite(src.time, base.time)),
@@ -361,7 +439,8 @@ export function migrateSaveData(
       : base.journalSketches || [],
     disciplines,
     audioSettings,
-    reducedMotion: typeof src.reducedMotion === 'boolean' ? src.reducedMotion : base.reducedMotion,
+    reducedMotion: reducedMotionOverride ?? base.reducedMotion,
+    reducedMotionOverride,
     difficultyMode: src.difficultyMode === 'relaxed' || src.difficultyMode === 'harsh' ? src.difficultyMode : 'standard',
     fishingToggleAssist: Boolean(src.fishingToggleAssist),
     movingBuildingId: null,
@@ -378,7 +457,7 @@ export function migrateSaveData(
     tripMaxDur: Object.fromEntries(Object.entries(numericEntries(src.tripMaxDur)).filter(([id]) => isId(TRIP_VISUAL_META, id))),
     inv: isRecord(src.inv) ? numericEntries(src.inv) : base.inv,
     objects:
-      src.version === SAVE_VERSION && Array.isArray(src.objects)
+      hasSavedWorld && Array.isArray(src.objects)
         ? src.objects.filter((object) => hasPosition(object) && typeof object.id === 'string')
         : base.objects,
     creatures,

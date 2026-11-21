@@ -69,25 +69,18 @@ export function drawTerrain(
   w: number,
   h: number,
   t: number,
-  wobbleFrac: number,
-  trips: Set<TripId>,
   flags: WorldFlags,
   reducedMotion: boolean,
+  calmStrength: number,
+  distantDrift = 0,
 ): void {
-  const motionScale = reducedMotion ? 0.18 : 1;
-  const hueShift =
-    trips.has('kaleido') || trips.has('disco')
-      ? (Math.sin(t * 0.8) * 24 + t * 12) * motionScale
-      : wobbleFrac * Math.sin(t * 0.9) * 18 * motionScale;
-
   const viewCenterX = cx + w / 2;
   const viewCenterY = cy + h / 2;
   const viewRadius = Math.hypot(w, h) * 0.58;
 
   // Base fill uses the current viewport center biome so seamless transitions never flash dark void
   const centerBiome = getBiomeAt(viewCenterX, viewCenterY);
-  const cHue = (centerBiome.hue + hueShift + 360) % 360;
-  ctx.fillStyle = `hsl(${cHue}, ${Math.min(72, centerBiome.sat + wobbleFrac * 12)}%, ${centerBiome.lit}%)`;
+  ctx.fillStyle = `hsl(${centerBiome.hue}, ${centerBiome.sat}%, ${centerBiome.lit}%)`;
   ctx.fillRect(cx - 32, cy - 32, w + 64, h + 64);
 
   // Draw visible REGION_ZONES valleys (sorted outer -> inner priority)
@@ -99,8 +92,7 @@ export function drawTerrain(
       continue;
     }
     const b = BIOMES[zone.id];
-    const bh = (b.hue + hueShift + 360) % 360;
-    ctx.fillStyle = `hsl(${bh}, ${Math.min(74, b.sat + wobbleFrac * 14)}%, ${b.lit}%)`;
+    ctx.fillStyle = `hsl(${b.hue}, ${b.sat}%, ${b.lit}%)`;
     ctx.beginPath();
     ctx.ellipse(zone.cx, zone.cy, zone.rx, zone.ry, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -233,11 +225,11 @@ export function drawTerrain(
       const b = getBiomeAt(x + tile * 0.5, y + tile * 0.5);
       const hash = Math.sin(x * 0.017 + y * 0.031) * 43758.5453;
       const frac = hash - Math.floor(hash);
-      const px = x + tile * (0.2 + frac * 0.6);
+      const px = x + tile * (0.2 + frac * 0.6) + distantDrift * 46;
       const py = y + tile * (0.2 + ((frac * 7) % 1) * 0.6);
 
       if (b.id === 'giggle_grove') {
-        const sway = Math.sin(t * 2.2 + frac * 12) * (2 + wobbleFrac * 4) * motionScale;
+        const sway = reducedMotion ? 0 : Math.sin(t * 2 + frac * 12) * 3 * calmStrength;
         grassTufts.push([px, py, sway]);
         if (frac > 0.58) daisies.push([px + 16, py - 6]);
       } else if (b.id === 'marmalade_flats') {
@@ -1150,16 +1142,20 @@ export function drawWorldFeature(
   ctx.restore();
 }
 
-export function drawWaterRipples(ctx: CanvasRenderingContext2D, ripples: WaterRipple[]): void {
+export function drawWaterRipples(
+  ctx: CanvasRenderingContext2D, ripples: WaterRipple[], intensity: number, still: boolean, flashFree: boolean,
+): void {
   if (ripples.length === 0) return;
   ctx.save();
   for (const r of ripples) {
-    const ratio = Math.max(0, 1 - r.age / r.maxAge);
-    ctx.globalAlpha = ratio * 0.72;
+    const progress = Math.min(1, r.age / r.maxAge);
+    const fade = Math.min(1, progress * 10) * (1 - progress) ** 2;
+    const radius = still ? r.maxRadius * 0.45 : r.radius;
+    ctx.globalAlpha = fade * intensity * (flashFree ? 0.28 : 0.64);
     ctx.strokeStyle = r.color;
     ctx.lineWidth = 2.4;
     ctx.beginPath();
-    ctx.ellipse(r.x, r.y, r.radius, r.radius * 0.52, 0, 0, Math.PI * 2);
+    ctx.ellipse(r.x, r.y, radius, radius * 0.52, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
   ctx.restore();
@@ -1210,13 +1206,13 @@ export function drawFishingSession(
   // Animated bobber position by FSM phase
   let bx = fishing.bobberX;
   let by = fishing.bobberY;
-  if (fishing.phase === 'nibble_1' || fishing.phase === 'nibble_2') {
-    bx += (reducedMotion ? 4 : Math.sin(t * 28) * 7) * (fishing.phase === 'nibble_2' ? -1 : 1);
+  if (!reducedMotion && (fishing.phase === 'nibble_1' || fishing.phase === 'nibble_2')) {
+    bx += Math.sin(t * 12) * 3 * (fishing.phase === 'nibble_2' ? -1 : 1);
   } else if (fishing.phase === 'bite') {
     by += 6;
-  } else if (fishing.phase === 'tension') {
-    bx += Math.sin(t * 16) * (fishing.fishPulling ? 8 : 3);
-    by += Math.cos(t * 12) * 3;
+  } else if (!reducedMotion && fishing.phase === 'tension') {
+    bx += Math.sin(t * 8) * (fishing.fishPulling ? 5 : 2);
+    by += Math.cos(t * 8) * 2;
   } else {
     by += reducedMotion ? 0 : Math.sin(t * 3.5) * 2.2;
   }
@@ -1226,16 +1222,16 @@ export function drawFishingSession(
     ctx.strokeStyle = 'rgba(224, 251, 252, 0.78)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.ellipse(bx, by + 2, 16 + ((t * 28) % 14), 8 + ((t * 14) % 7), 0, 0, Math.PI * 2);
+    ctx.ellipse(bx, by + 2, 18, 9, 0, 0, Math.PI * 2);
     ctx.stroke();
   } else if (fishing.phase === 'bite') {
-    const r = 18 + (reducedMotion ? 10 : (t * 62) % 34);
+    const r = 28;
     ctx.strokeStyle = '#ffd166';
     ctx.lineWidth = 3.2;
     ctx.beginPath();
     ctx.ellipse(bx, by + 2, r, r * 0.54, 0, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.strokeStyle = '#ff5d8f';
+    ctx.strokeStyle = '#26192e';
     ctx.lineWidth = 2.4;
     ctx.beginPath();
     ctx.ellipse(bx, by + 2, r * 0.62, r * 0.34, 0, 0, Math.PI * 2);
@@ -1266,12 +1262,15 @@ export function drawFishingSession(
   if (fishing.phase === 'bite' || fishing.phase === 'nibble_1' || fishing.phase === 'nibble_2') {
     ctx.font = '800 12px "Plus Jakarta Sans", sans-serif';
     ctx.textAlign = 'center';
-    const cue = fishing.phase === 'bite' ? 'DIVE! HOOK NOW!' : 'twitch...';
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 4;
-    ctx.strokeText(cue, bx, by - 18);
+    ctx.textBaseline = 'middle';
+    const cue = fishing.phase === 'bite' ? 'HOOK NOW' : 'NIBBLE';
+    const labelWidth = ctx.measureText(cue).width + 18;
+    ctx.fillStyle = INK;
+    ctx.beginPath();
+    ctx.roundRect(fishing.bobberX - labelWidth / 2, fishing.bobberY - 40, labelWidth, 20, 5);
+    ctx.fill();
     ctx.fillStyle = fishing.phase === 'bite' ? '#ffd166' : '#c8f4ff';
-    ctx.fillText(cue, bx, by - 18);
+    ctx.fillText(cue, fishing.bobberX, fishing.bobberY - 30);
   }
   ctx.restore();
 }
@@ -1280,13 +1279,13 @@ export function drawWorldObject(
   ctx: CanvasRenderingContext2D,
   o: WorldObject,
   t: number,
-  wobbleFrac: number,
-  trips: Set<TripId>,
   reducedMotion = false,
+  flashFree = false,
+  contour = 0,
 ): void {
-  const m = reducedMotion ? 0.2 : 1;
-  const sway = Math.sin(t * (2.2 + wobbleFrac * 2.8) + o.seed) * (3 + wobbleFrac * 7) * m;
-  const shakeX = o.shake > 0 ? Math.sin(t * 72) * 5.5 : 0;
+  const m = reducedMotion ? 0 : 1;
+  const sway = contour;
+  const shakeX = o.shake > 0 && !reducedMotion && !flashFree ? Math.sin(t * 18) * 2 : 0;
 
   ctx.save();
   ctx.translate(o.x + shakeX, o.y);
@@ -1296,7 +1295,7 @@ export function drawWorldObject(
   ctx.ellipse(0, 4, o.type === 'tree' || o.type === 'cabinet' || o.type === 'pear_tree' ? 24 : 16, 8, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  const flash = o.hitFlash > 0;
+  const flash = !flashFree && o.hitFlash > 0;
 
   if (o.type === 'tree') {
     ctx.strokeStyle = INK;
@@ -1316,7 +1315,7 @@ export function drawWorldObject(
 
     const crownX = sway * 1.15;
     const crownY = -62;
-    const hue = (318 + o.seed * 4 + (wobbleFrac > 0.35 || trips.has('kaleido') ? t * 32 * m : 0)) % 360;
+    const hue = (318 + o.seed * 4) % 360;
     const crownFill = flash ? '#fffdf7' : `hsl(${hue}, 76%, 56%)`;
     const crownShade = flash ? '#fffdf7' : `hsl(${hue}, 70%, 44%)`;
 
@@ -1341,10 +1340,6 @@ export function drawWorldObject(
     ctx.arc(crownX, crownY - 12, 19, 0, Math.PI * 2);
     ctx.fill();
 
-    if (wobbleFrac >= 0.32 || trips.has('kaleido') || trips.has('cosmic')) {
-      drawGooglyEye(ctx, crownX - 8, crownY - 6, 5.8, t + o.seed, trips.has('kaleido'));
-      drawGooglyEye(ctx, crownX + 8, crownY - 6, 5.8, t + o.seed + 1.2, trips.has('kaleido'));
-    }
   } else if (o.type === 'pear_tree') {
     // Prism Orchard glass-pear tree with transparent chiming fruit!
     ctx.strokeStyle = INK;
@@ -1677,7 +1672,7 @@ export function drawWorldObject(
       ctx.fill();
       ctx.stroke();
     }
-    drawGooglyEye(ctx, 0, 0, 8.5, t * 1.4 + o.seed, wobbleFrac > 0.4 || trips.has('kaleido'));
+    drawGooglyEye(ctx, 0, 0, 8.5, t * m + o.seed, false);
     ctx.restore();
   } else if (o.type === 'tuned_reed_patch') {
     // Harmonic pink-gold resonant cavern reeds
@@ -2562,13 +2557,14 @@ export function drawCreature(
   t: number,
   isGravityNap: boolean,
   reducedMotion = false,
+  flashFree = false,
 ): void {
   const def = CREATURE_DEFS[c.type];
-  const m = reducedMotion ? 0.2 : 1;
+  const m = reducedMotion ? 0 : 1;
   const hover = Math.sin(t * 4.2 + c.seed) * 4 * m + (isGravityNap ? 18 : 0);
 
   if (c.aiState === 'windup' && def.hostile) {
-    const pulse = 0.55 + Math.sin(t * 24) * 0.3;
+    const pulse = 0.8;
     ctx.save();
     if (def.policy === 'charger') {
       ctx.strokeStyle = `rgba(255, 77, 109, ${pulse})`;
@@ -2616,7 +2612,7 @@ export function drawCreature(
     if (c.hitAnim > 0) ctx.scale(1.22, 0.82);
   }
 
-  const flash = c.hitFlash > 0;
+  const flash = !flashFree && c.hitFlash > 0;
 
   if (c.type === 'needle_wren') {
     // Needle Wren: brass phonograph legs—clearly lifts one foot when c.footLift > 0 before groove reversal!
@@ -2878,13 +2874,15 @@ export function drawPlayer(
   isGravityNap: boolean,
   ghostTimer: number,
   reducedMotion = false,
+  flashFree = false,
 ): void {
   const ch = CHARACTERS[p.charId];
   const effectiveStyle = trips.has('floaty') ? 'astral_glide' : p.moveStyle;
   const st = STYLES[effectiveStyle];
   const speedNorm = Math.min(1, Math.hypot(p.vx, p.vy) / 160);
 
-  let lift = st.hover ? st.hover + Math.sin(t * 5) * 4 : Math.abs(Math.sin(p.bob)) * st.bounce * speedNorm;
+  let lift = (st.hover || 0) + (reducedMotion ? 0 : st.hover
+    ? Math.sin(t * 5) * 4 : Math.abs(Math.sin(p.bob)) * st.bounce * speedNorm);
   if (isGravityNap) lift += 16;
   if (p.elevation === 1) lift += 18;
 
@@ -2905,8 +2903,8 @@ export function drawPlayer(
   ctx.scale(p.facing * p.squashX, p.squashY);
   if (p.actionAnim > 0) ctx.rotate(0.22);
 
-  const flash = p.hitFlash > 0;
-  const leg = Math.sin(p.bob) * 11 * speedNorm;
+  const flash = !flashFree && p.hitFlash > 0;
+  const leg = reducedMotion ? 0 : Math.sin(p.bob) * 11 * speedNorm;
 
   ctx.strokeStyle = ch.colors.limb;
   ctx.lineWidth = 5.5;
@@ -3216,8 +3214,8 @@ export function drawProjectile(ctx: CanvasRenderingContext2D, pr: Projectile, t:
   ctx.restore();
 }
 
-export function drawInteractPrompt(ctx: CanvasRenderingContext2D, prompt: InteractPrompt, t: number): void {
-  const y = prompt.y - 64 + Math.sin(t * 6) * 2.5;
+export function drawInteractPrompt(ctx: CanvasRenderingContext2D, prompt: InteractPrompt): void {
+  const y = prompt.y - 64;
   ctx.save();
   ctx.font = '800 12px "Plus Jakarta Sans", sans-serif';
   const metrics = ctx.measureText(prompt.label);
@@ -3225,7 +3223,7 @@ export function drawInteractPrompt(ctx: CanvasRenderingContext2D, prompt: Intera
   const w = metrics.width + padX * 2;
   const h = 24;
 
-  ctx.fillStyle = 'rgba(22, 12, 36, 0.94)';
+  ctx.fillStyle = '#160c24';
   ctx.strokeStyle = prompt.accent;
   ctx.lineWidth = 2.2;
   ctx.beginPath();

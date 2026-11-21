@@ -191,7 +191,7 @@ export function canCraftRecipe(
   const fieldTinker = hasPerk(opts?.disciplines, 'field_tinker');
 
   if (!fieldTinker) {
-    if ((recipe.type === 'blend' || recipe.reqStation === 'funk_blender') && !nearBlender) {
+    if (((recipe.type === 'blend' && !recipe.fieldCraft) || recipe.reqStation === 'funk_blender') && !nearBlender) {
       return { ok: false, reason: 'need_blender' };
     }
     if (recipe.reqStation === 'workbench' && !opts?.nearWorkbench) {
@@ -1093,11 +1093,8 @@ export interface TripVisualMeta {
   peakNote: string;
   afterglowNote: string;
   riskLevel: 'Gentle' | 'Vibrant' | 'Intense' | 'High Bad-Trip Risk';
-  cameraZoomAmp: number;
-  chromaSplit: number;
   enemyTimeScale: number;
   playerSpeedMult: number;
-  hasTracers: boolean;
 }
 
 export const TRIP_VISUAL_META: Record<TripId, TripVisualMeta> = {
@@ -1106,136 +1103,112 @@ export const TRIP_VISUAL_META: Record<TripId, TripVisualMeta> = {
     name: 'Kaleido-Shroom',
     shortName: 'KALEIDO',
     accent: '#ff5d8f',
-    effectSummary: 'Breathing mandala rosettes, vivid floral bloom & spore trails',
+    effectSummary: 'Reveals Cosmic Crystals and quickens your stride.',
     habitat: 'The Giggle-Grove meadows & Mood Soil plots',
-    onsetNote: 'Corners blush magenta as leaves begin breathing in slow waves.',
-    peakNote: 'Full symmetrical corner mandalas, hypnotic flora eyes & Cosmic Crystal sight.',
-    afterglowNote: 'Warm rose shimmer and buoyant spore motes linger softly.',
+    onsetNote: 'Look for hidden Cosmic Crystals near the path.',
+    peakNote: 'Follow the revealed crystals while the effect lasts.',
+    afterglowNote: 'Gather any visible crystals before the effect fades.',
     riskLevel: 'Vibrant',
-    cameraZoomAmp: 0.038,
-    chromaSplit: 2.5,
     enemyTimeScale: 1,
     playerSpeedMult: 1.05,
-    hasTracers: false,
   },
   floaty: {
     id: 'floaty',
     name: 'Cloud-Puff Spore',
     shortName: 'FLOATY',
     accent: '#8be9fd',
-    effectSummary: 'Iridescent rising soap bubbles, pastel cloud wisps & zero-G hover',
+    effectSummary: 'Temporarily grants Astral Glide.',
     habitat: 'Cloud-9 Laundromat & Unpaired Sea updrafts',
-    onsetNote: 'Gravity loosens its collar; soft cyan mist curls underfoot.',
-    peakNote: 'Glossy soap bubbles, foreground cloud wisps & effortless hover over sticky jam.',
-    afterglowNote: 'Weightless breeze trails ease back down to earth.',
+    onsetNote: 'Use the glide to cross sticky ground.',
+    peakNote: 'Skim across jam and reversing grooves.',
+    afterglowNote: 'Finish crossing before your normal stride returns.',
     riskLevel: 'Gentle',
-    cameraZoomAmp: 0.022,
-    chromaSplit: 2.0,
     enemyTimeScale: 1,
     playerSpeedMult: 1.14,
-    hasTracers: true,
   },
   synesthesia: {
     id: 'synesthesia',
     name: 'Hyper-Fizz Nectar',
     shortName: 'SYNESTHESIA',
     accent: '#ffd166',
-    effectSummary: 'Live equalizer sound-wave ribbons, musical step ripples & +38% sprint',
+    effectSummary: 'Increases sprint speed and speeds nearby crop growth.',
     habitat: 'Marmalade Flats fizzy fountains & Listening Booths',
-    onsetNote: 'Footsteps crackle into bright lemon-gold ripples.',
-    peakNote: 'Dancing spectrum bars, floating musical glyphs & 2.5x nearby crop growth.',
-    afterglowNote: 'Faint melodic echoes hum through nearby sprouts.',
+    onsetNote: 'Try a quick sprint or return to your crops.',
+    peakNote: 'Use the speed for a short expedition or stay near Mood Soil.',
+    afterglowNote: 'Wrap up nearby tending before the speed wears off.',
     riskLevel: 'Vibrant',
-    cameraZoomAmp: 0.026,
-    chromaSplit: 3.0,
     enemyTimeScale: 1,
     playerSpeedMult: 1.38,
-    hasTracers: false,
   },
   chrono: {
     id: 'chrono',
     name: 'Chrono-Pickle',
     shortName: 'CHRONO',
     accent: '#2ec4b6',
-    effectSummary: 'Clockwork corner gears, ghostly echo tracers & 55% slower foes',
+    effectSummary: 'Slows foes while your own stride quickens.',
     habitat: 'Bureaucracy Bog brine jars & Pickle crops',
-    onsetNote: 'Seconds stretch like warm taffy with a faint brass tick.',
-    peakNote: 'Rotating clockwork gears, pocket-watch rim dial, echo trails & slowed enemies.',
-    afterglowNote: 'Crisp sepia-teal clarity as clocks sync back up.',
+    onsetNote: 'Use the gap to move away from nearby foes.',
+    peakNote: 'Cross enemy territory while their attacks are slower.',
+    afterglowNote: 'Give foes more room as they return to normal speed.',
     riskLevel: 'Gentle',
-    cameraZoomAmp: 0.018,
-    chromaSplit: 3.5,
     enemyTimeScale: 0.45,
     playerSpeedMult: 1.08,
-    hasTracers: true,
   },
   cosmic: {
     id: 'cosmic',
     name: 'Void-Cocoa',
     shortName: 'COSMIC',
     accent: '#b388ff',
-    effectSummary: 'Sacred-geometry ground lattice, object constellations & astral double',
+    effectSummary: 'Reveals hidden crystals and slightly slows foes.',
     habitat: 'Vinyl Desert & Dead Air Basin starlight groves',
-    onsetNote: 'Faint violet geometry sketches itself across the soil.',
-    peakNote: 'Flower-of-Life ground grid, starlight constellation threads & orbiting astral twin.',
-    afterglowNote: 'Stargazer calm with glowing dust trailing behind.',
+    onsetNote: 'Check for hidden crystals along your route.',
+    peakNote: 'Use the slower attacks to reach an exposed crystal.',
+    afterglowNote: 'Gather any crystals before they fade from view.',
     riskLevel: 'Intense',
-    cameraZoomAmp: 0.042,
-    chromaSplit: 4.0,
     enemyTimeScale: 0.92,
     playerSpeedMult: 1.04,
-    hasTracers: false,
   },
   disco: {
     id: 'disco',
     name: 'Disco Overdrive',
     shortName: 'DISCO',
     accent: '#ff3b8d',
-    effectSummary: 'Illuminated dancefloor tiles, mirrorball flares, mega speed & Bad-Trip shield',
+    effectSummary: 'Boosts speed and helps prevent a Bad Trip.',
     habitat: 'Funk-Blender combo (Kaleido-Shroom + Hyper-Fizz)',
-    onsetNote: 'A warm bassline drops as neon floor tiles flicker awake.',
-    peakNote: 'Full club spotlights, mirrorball glints, +28% speed & Bad-Trip immunity shield.',
-    afterglowNote: 'Lingering confetti groove and steady upbeat Vibe.',
+    onsetNote: 'Use the boost to cross an exposed stretch.',
+    peakNote: 'Plan around the speed bonus and keep Vibe up.',
+    afterglowNote: 'Look for shelter before the protection fades.',
     riskLevel: 'Gentle',
-    cameraZoomAmp: 0.032,
-    chromaSplit: 3.0,
     enemyTimeScale: 0.85,
     playerSpeedMult: 1.28,
-    hasTracers: true,
   },
   prism_refract: {
     id: 'prism_refract',
     name: 'Prism Absinthe',
     shortName: 'PRISM',
     accent: '#72efdd',
-    effectSummary: 'RGB chromatic lens fracture, prismatic light beams & crystal sight',
+    effectSummary: 'Reveals Cosmic Crystals and increases movement speed.',
     habitat: 'Prism Orchard greenhouses & Funk-Blender',
-    onsetNote: 'Edges fracture into delicate cyan and magenta ghost lines.',
-    peakNote: 'Radiating rainbow prism rays, floating glass facets & crystal sight.',
-    afterglowNote: 'Clean optical shimmer across every shiny surface.',
+    onsetNote: 'Check for newly visible crystal nodes.',
+    peakNote: 'Collect nearby Cosmic Crystals while your sight is clear.',
+    afterglowNote: 'Collect any remaining crystals before the effect wears off.',
     riskLevel: 'Intense',
-    cameraZoomAmp: 0.035,
-    chromaSplit: 8.5,
     enemyTimeScale: 0.95,
     playerSpeedMult: 1.1,
-    hasTracers: true,
   },
   velvet_fog: {
     id: 'velvet_fog',
     name: 'Velvet Spores',
     shortName: 'VELVET',
     accent: '#c77dff',
-    effectSummary: 'Melting candle-wax curtains, deep haze & wide night lantern aura',
+    effectSummary: 'Extends night sight, raises Wobble, and lowers Vibe.',
     habitat: 'Wickwater Afterhours canals & Funk-Blender',
-    onsetNote: 'Heavy plum haze drapes the top edge as Vibe dips noticeably.',
-    peakNote: 'Dripping amber-rimmed wax curtains, wide night sight & high Melt Spiral risk.',
-    afterglowNote: 'Drowsy twilight embers fade as steady air returns.',
+    onsetNote: 'Check your Vibe and mark a warm refuge.',
+    peakNote: 'Use the wider lantern light to find shelter.',
+    afterglowNote: 'Recover Vibe near shelter or sip Boring Decaf.',
     riskLevel: 'High Bad-Trip Risk',
-    cameraZoomAmp: 0.048,
-    chromaSplit: 5.5,
     enemyTimeScale: 0.88,
     playerSpeedMult: 0.94,
-    hasTracers: true,
   },
 };
 
@@ -1245,7 +1218,6 @@ export const TRIP_SYNERGIES: TripSynergyDef[] = [
     pair: ['kaleido', 'prism_refract'],
     name: 'Starglass Fractal',
     accent: '#72efdd',
-    visualDesc: '12-ray stained-glass kaleidoscope beams & rainbow caustic rings',
     bonusDesc: 'Bonus Cosmic Crystal drops & +8% radiant stride',
     speedBonus: 0.08,
     crystalBonus: true,
@@ -1255,8 +1227,7 @@ export const TRIP_SYNERGIES: TripSynergyDef[] = [
     pair: ['cosmic', 'chrono'],
     name: 'Astral Timefold',
     accent: '#b388ff',
-    visualDesc: 'Interlocking zodiac-clockwork rings & suspended golden dust',
-    bonusDesc: 'Ultra-slow 35% foe speed & serene time focus',
+    bonusDesc: 'Foes move and attack at 35% of normal speed',
     enemyTimeScale: 0.35,
   },
   {
@@ -1264,15 +1235,13 @@ export const TRIP_SYNERGIES: TripSynergyDef[] = [
     pair: ['velvet_fog', 'kaleido'],
     name: 'Fever Dream Tapestry',
     accent: '#ff5d8f',
-    visualDesc: 'Baroque swirling neon filigree & deep melting parallax',
-    bonusDesc: 'Hyper-vivid depth (keep Vibe high or spiral!)',
+    bonusDesc: 'Keep Vibe high while the two brews raise Wobble',
   },
   {
     id: 'hyper_chord',
     pair: ['synesthesia', 'disco'],
     name: 'Hyper-Chord Rave',
     accent: '#ffd166',
-    visualDesc: '24-bar radial spectrum ring & beat-synced neon dancefloor',
     bonusDesc: '+15% extra sprint & friendly creature charm aura',
     speedBonus: 0.15,
     charmAura: true,
@@ -1282,21 +1251,9 @@ export const TRIP_SYNERGIES: TripSynergyDef[] = [
     pair: ['floaty', 'cosmic'],
     name: 'Zero-G Nebula Drift',
     accent: '#8be9fd',
-    visualDesc: 'Parallax starlight streaks & orbiting iridescent mini-planets',
     bonusDesc: '+12% glide speed & frictionless drift',
     speedBonus: 0.12,
   },
-];
-
-export const BAD_TRIP_WHISPERS: string[] = [
-  'DID YOU LOCK THE MAILBOX?',
-  'THE TREES ARE COUNTING YOUR STEPS',
-  'WHY ARE YOUR SHOES SO LOUD?',
-  'EVERYONE HEARD THAT THOUGHT',
-  'THE GROUND IS MELTING SLIGHTLY',
-  'BREATHE... FIND A LAVA LAMP OR DREAMCATCHER',
-  'IS THAT A TAX INSPECTOR?!',
-  'SIP BORING DECAF TO GROUND',
 ];
 
 export function computeTripStage(
@@ -1359,15 +1316,11 @@ export function computeTripProfile(
     stageFactor = st.factor;
   }
 
-  let cameraZoomAmp = 0;
-  let chromaSplit = 0;
   let enemyTimeScale = 1;
   let playerSpeedMult = 1;
 
   for (const [tid] of activeEntries) {
     const meta = TRIP_VISUAL_META[tid];
-    cameraZoomAmp = Math.max(cameraZoomAmp, meta.cameraZoomAmp);
-    chromaSplit = Math.max(chromaSplit, meta.chromaSplit);
     enemyTimeScale = Math.min(enemyTimeScale, meta.enemyTimeScale);
     if (meta.playerSpeedMult > 1) {
       playerSpeedMult = Math.max(playerSpeedMult, meta.playerSpeedMult);
@@ -1379,12 +1332,8 @@ export function computeTripProfile(
   if (synergy) {
     if (synergy.speedBonus) playerSpeedMult += synergy.speedBonus;
     if (synergy.enemyTimeScale) enemyTimeScale = Math.min(enemyTimeScale, synergy.enemyTimeScale);
-    cameraZoomAmp = Math.max(cameraZoomAmp, 0.044);
-    chromaSplit = Math.max(chromaSplit, synergy.id === 'starglass_fractal' ? 10.5 : 6.5);
   }
 
-  cameraZoomAmp *= stageFactor;
-  chromaSplit *= 0.78 + 0.22 * stageFactor;
 
   const intensity = Math.max(
     0,
@@ -1427,8 +1376,6 @@ export function computeTripProfile(
     badTripTier = badTripIntensity > 0.76 ? 3 : 2;
     label = badTripTier === 3 ? 'FULL MELT SPIRAL' : 'BAD TRIP · PARANOIA';
     advice = 'Sip Boring Decaf, eat a Moon-Petal, or stand near a Lava Lamp / Dreamcatcher!';
-    cameraZoomAmp = Math.max(cameraZoomAmp, 0.03 + badTripIntensity * 0.048);
-    chromaSplit = Math.max(chromaSplit, 5.5 + badTripIntensity * 9.5);
   } else if (highWobble && vibeRatio < 0.48 && !hasDiscoShield && rawSpiralScore >= 0.22) {
     mood = 'uneasy';
     badTripTier = 1;
@@ -1437,7 +1384,6 @@ export function computeTripProfile(
     advice = nearCalmingTotem
       ? 'Velvet Dreamcatcher is keeping the shadows at bay.'
       : 'Vibe is dipping while tripping high—warm up or eat!';
-    chromaSplit = Math.max(chromaSplit, 3.5);
   } else if (wobble >= 52 || activeCount >= 2 || hasDiscoShield || synergy) {
     mood = 'euphoric';
     euphoriaIntensity = Math.max(0.35, Math.min(1, intensity * (0.55 + vibeRatio * 0.55)));
@@ -1449,7 +1395,7 @@ export function computeTripProfile(
           ? 'WARM AFTERGLOW'
           : 'GOOD TRIP · EUPHORIC';
     advice = synergy
-      ? `${synergy.visualDesc} — ${synergy.bonusDesc}`
+      ? synergy.bonusDesc
       : dominantTrip
         ? stage === 'onset'
           ? TRIP_VISUAL_META[dominantTrip].onsetNote
@@ -1483,8 +1429,6 @@ export function computeTripProfile(
     euphoriaIntensity,
     badTripIntensity,
     dominantTrip,
-    cameraZoomAmp,
-    chromaSplit,
     enemyTimeScale,
     playerSpeedMult,
   };

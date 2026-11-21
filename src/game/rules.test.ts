@@ -60,11 +60,13 @@ import {
 import type { CharacterId, GameState } from './types.ts';
 import { createCampProgress, getCountyWeather, getWeatherPressure, resolveCampShift, RIBBON_TRAILS, stepTrail } from './fieldwork.ts';
 import type { TrailRun } from './fieldwork.ts';
+import { newExpeditions } from './expeditions.ts';
 
 function makeStubState(charId: CharacterId = 'pip', seed = 12345): GameState {
   return {
     version: SAVE_VERSION,
     camp: createCampProgress(),
+    expeditions: newExpeditions(),
     worldSeed: seed,
     time: 0,
     dayTime: 10,
@@ -437,7 +439,7 @@ test('psychedelic trip profile differentiates Sober, Come-up, Euphoric Good Trip
   assert.equal(goodTrip.dominantTrip, 'prism_refract');
   assert.ok(goodTrip.euphoriaIntensity >= 0.5);
   assert.equal(goodTrip.badTripIntensity, 0);
-  assert.ok(goodTrip.chromaSplit >= 8);
+  assert.equal(goodTrip.synergy?.id, 'starglass_fractal');
 
   // 4. Uneasy jitters when Vibe dips into the 40%s while Wobble is high
   const uneasy = computeTripProfile(43, 100, 66, { cosmic: 20 });
@@ -448,7 +450,7 @@ test('psychedelic trip profile differentiates Sober, Come-up, Euphoric Good Trip
   const badTrip = computeTripProfile(24, 100, 88, { velvet_fog: 32, kaleido: 20 });
   assert.equal(badTrip.mood, 'bad_trip');
   assert.ok(badTrip.badTripIntensity >= 0.7);
-  assert.ok(badTrip.chromaSplit >= 9);
+  assert.equal(badTrip.badTripTier, 3);
   assert.equal(badTrip.label, 'FULL MELT SPIRAL');
 
   // 6. Extreme Wobble >= 86 with dipping Vibe <= 52% also spirals unless Disco shields
@@ -709,7 +711,7 @@ test('Pass 2: 5-tier Disciplines, diminishing returns, Tier-3 Perks, Authoritati
   assert.equal(store.get(SAVE_BACKUP_KEY), '{corrupt_json:::');
 });
 
-test('Pass 3: 3 new outer regions, 10 disciplines with unique perks, Choir Irrigator Acoustics gate, County Sync finale, and v5->v6 migration', () => {
+test('Pass 3: outer regions, disciplines, Choir Irrigator, County Sync, and legacy v5 migration', () => {
   // 1. All 10 disciplines have 2 unique perks each (20 total unique perks)
   assert.equal(CORE_DISCIPLINE_IDS.length, 10);
   const allPerkIds = new Set<string>();
@@ -794,7 +796,7 @@ test('Pass 3: 3 new outer regions, 10 disciplines with unique perks, Choir Irrig
   assert.equal(livelySync.peacefulRoute, false);
   assert.notEqual(livelySync.leadEpilogue, peacefulSync.leadEpilogue);
 
-  // 5. v5 -> v6 save migration preserves existing state & initializes Pass 3 flags + 10 disciplines
+  // A v5 migration preserves existing state and initializes Pass 3 flags and disciplines.
   const v5Save = {
     ...makeStubState('tilda', 777),
     version: 5,
@@ -803,16 +805,56 @@ test('Pass 3: 3 new outer regions, 10 disciplines with unique perks, Choir Irrig
       angling: { xp: 10, tier: 1, perk: null, recentActions: [] },
     },
   };
-  const migratedV6 = migrateSaveData(v5Save, makeStubState);
-  assert.ok(migratedV6);
-  assert.ok(migratedV6.disciplines);
-  assert.equal(migratedV6.version, 6);
-  assert.equal(migratedV6.player.charId, 'tilda');
-  assert.equal(migratedV6.disciplines.farming.tier, 2);
-  assert.equal(migratedV6.disciplines.acoustics.tier, 1);
-  assert.equal(migratedV6.disciplines.hospitality.tier, 1);
-  assert.equal(migratedV6.worldFlags.undertoneForkTuned, false);
-  assert.equal(migratedV6.worldFlags.allNightBroadcastHosted, false);
+  const migrated = migrateSaveData(v5Save, makeStubState);
+  assert.ok(migrated);
+  assert.ok(migrated.disciplines);
+  assert.equal(migrated.version, SAVE_VERSION);
+  assert.equal(migrated.player.charId, 'tilda');
+  assert.equal(migrated.disciplines.farming.tier, 2);
+  assert.equal(migrated.disciplines.acoustics.tier, 1);
+  assert.equal(migrated.disciplines.hospitality.tier, 1);
+  assert.equal(migrated.worldFlags.undertoneForkTuned, false);
+  assert.equal(migrated.worldFlags.allNightBroadcastHosted, false);
+});
+
+test('v7 preferences migrate v6 effects and preserve saved world collections and progress', () => {
+  const legacy = {
+    ...makeStubState(),
+    version: 6,
+    day: 8,
+    reducedMotion: true,
+    audioSettings: { music: 0, effects: 0.4, flashFree: false, effectStrength: 0.42, master: -1 },
+    inv: { spool_perch: 2 },
+    objects: [{ id: 'foraged_berry', x: 10, y: 24, respawn: 14 }],
+    creatures: [],
+  };
+  const migrated = migrateSaveData(legacy, makeStubState);
+  assert.ok(migrated);
+  assert.equal(migrated.version, SAVE_VERSION);
+  assert.equal(migrated.day, 8);
+  assert.deepEqual(migrated.inv, { spool_perch: 2 });
+  assert.deepEqual(migrated.objects, legacy.objects);
+  assert.deepEqual(migrated.creatures, []);
+  assert.equal(migrated.reducedMotionOverride, true);
+  assert.deepEqual(migrated.audioSettings, {
+    ...DEFAULT_AUDIO_SETTINGS, music: 0, effects: 0.4, flashFree: false, perceptionIntensity: 0.42, master: 0,
+  });
+  assert.deepEqual(migrateSaveData(migrated, makeStubState), migrated);
+});
+
+test('missing settings follow the system and malformed saves leave the original recoverable', () => {
+  const buildReducedMotion = () => ({ ...makeStubState(), reducedMotion: true });
+  const minimal = migrateSaveData({ player: {} }, buildReducedMotion);
+  assert.ok(minimal);
+  assert.equal(minimal.reducedMotionOverride, null);
+  assert.equal(minimal.reducedMotion, true);
+  assert.deepEqual(minimal.audioSettings, DEFAULT_AUDIO_SETTINGS);
+  const map = new Map<string, string>();
+  const storage = { getItem: (key: string) => map.get(key) ?? null, setItem: (key: string, value: string) => { map.set(key, value); } };
+  assert.deepEqual(safeLoadAndMigrate(storage, makeStubState), { state: null, backupPreserved: false });
+  map.set(SAVE_KEY, '{"version":6,');
+  assert.deepEqual(safeLoadAndMigrate(storage, makeStubState), { state: null, backupPreserved: true, unreadable: true });
+  assert.equal(map.get(SAVE_KEY), map.get(SAVE_BACKUP_KEY));
 });
 
 test('Completion: Furniture reachability, camp shelter, recoverable melt satchels, grounded regional events, and Pass 3 perk mechanics', () => {

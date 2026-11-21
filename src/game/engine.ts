@@ -52,10 +52,18 @@ import {
   WEATHER,
 } from './fieldwork';
 import type { CampJob, TrailId, TrailRun } from './fieldwork';
+import {
+  actionLabel, countSites, expeditionActionAt, GROVE_CAMP, hasSite, HOLLOW, HOLLOW_COMPANION_HOME,
+  HOLLOW_PACK, HOLLOW_QUARTZ, HOLLOW_RIBBONS, HOLLOW_SAFE_RADIUS, HOLLOW_SHELTER, HOLLOW_ZONE_RADIUS,
+  hollowPressure, hollowReady, millpondBankAt, MILLPOND, MILLPOND_BANKS, MILLPOND_RIBBONS, millpondReady,
+  MINT_BEDS, newExpeditions, within,
+} from './expeditions';
+import type { ExpeditionAction, HollowRole } from './expeditions';
 import { drawRibbonGate, drawWeatherVeil } from './fieldworkArt';
+import { drawExpeditionNavigation, drawExpeditionScenery } from './expeditionArt';
+import { imageReady, loadFieldAssets } from './fieldAssets';
 import {
   applyXpGain,
-  BAD_TRIP_WHISPERS,
   buildMeltRecoveryOutcome,
   canCraftRecipe,
   canSeeCrystals,
@@ -97,8 +105,12 @@ import {
   DEFAULT_AUDIO_SETTINGS,
   DEFAULT_WORLD_FLAGS,
   hasSavedGame,
+  normalizeAudioSettings,
+  readPreferences,
+  readSavePreferences,
   safeLoadAndMigrate,
   SAVE_VERSION,
+  writePreferences,
 } from './save';
 import {
   drawBuilding,
@@ -116,11 +128,12 @@ import {
   drawWorldFeature,
   drawWorldObject,
 } from './sprites';
-import { drawTripScreenOverlay, drawTripWorldLayer, getTripDominantColor } from './tripFx';
+import { PerceptionDirector, VisualCueBridge } from './perception';
+import { drawTripMotif, selectTripMotif, tripPaintStrength } from './tripFx';
+import { clampFrameSeconds, getMeltPressure, PERCEPTION } from './perceptionTuning';
 import { LANDMARKS, mulberry32, REGION_ZONES, ROADS, TRANSPORT_ROUTES, WORLD_FEATURES } from './world';
 import type {
   AudioSettings,
-  BadTripPhantom,
   BiomeId,
   Building,
   CharacterId,
@@ -133,15 +146,14 @@ import type {
   GameState,
   HudSnapshot,
   InteractPrompt,
+  LandmarkDef,
   ModalType,
   MoveStyleId,
   ObjectType,
   PerkId,
   PhaseId,
   ResidentDef,
-  SoundWaveRipple,
   TechniqueId,
-  TracerSnapshot,
   TransportId,
   TripId,
   WaterRipple,
@@ -189,7 +201,19 @@ export class GameEngine {
   private ctx: CanvasRenderingContext2D;
   private minimapCanvas: HTMLCanvasElement | null = null;
   private callbacks: EngineCallbacks;
-  public audio = new FunkAudio();
+  private readonly perception = new PerceptionDirector();
+  private readonly visualCues = new VisualCueBridge();
+  private readonly fieldAssets = loadFieldAssets();
+  private paperPattern: CanvasPattern | null = null;
+  private resonantLandmark: LandmarkDef | null = null;
+  private readonly motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+  private preferencesChanged = false;
+  public audio = new FunkAudio((cue) => {
+    if (this.mode === 'playing' && !document.hidden) {
+      const { x, y } = this.state.player;
+      this.visualCues.add(cue, x, y, this.state.time);
+    }
+  });
 
   private mode: GameMode = 'title';
   private activeModal: ModalType = null;
@@ -218,12 +242,7 @@ export class GameEngine {
   private particles: PooledParticle[] = [];
   private particleCursor = 0;
   private ambientMotes: AmbientMote[] = [];
-  private playerTracers: TracerSnapshot[] = [];
-  private tracerTimer = 0;
-  private soundRipples: SoundWaveRipple[] = [];
   private waterRipples: WaterRipple[] = [];
-  private badTripPhantoms: BadTripPhantom[] = [];
-  private phantomSpawnTimer = 0;
   private lastBadTripNotice = false;
 
   public fishing: FishingSession = createIdleFishingSession();
@@ -232,6 +251,9 @@ export class GameEngine {
   private buildingMove: { id: string; rotation: number } | null = null;
   private foldSpanTimer = 0;
   private guideLineTimer = 0;
+  private lanternGlow: { x: number; y: number; time: number } | null = null;
+  private steamHeatTimer = 0;
+  private companionBellTimer = 0;
   private ferryCallTimer = 3.5;
   private lastDockDisturbed = false;
 
@@ -241,12 +263,29 @@ export class GameEngine {
 
   private destroyed = false;
   private pausedRendered = false;
+  private loopStarted = false;
+  private frameRemainder = 0;
+  private readonly worldCanvas: HTMLCanvasElement;
+  private readonly worldCtx: CanvasRenderingContext2D;
+  private readonly lightCanvas: HTMLCanvasElement;
+  private readonly lightCtx: CanvasRenderingContext2D;
+  private lastWeatherCue: string | null = null;
+  private criticalMelt = false;
+  private shelteredAtRefuge = false;
 
   constructor(canvas: HTMLCanvasElement, callbacks: EngineCallbacks) {
     this.canvas = canvas;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Canvas 2D context unavailable');
     this.ctx = context;
+    this.worldCanvas = document.createElement('canvas');
+    const worldContext = this.worldCanvas.getContext('2d', { alpha: false });
+    if (!worldContext) throw new Error('World Canvas 2D context unavailable');
+    this.worldCtx = worldContext;
+    this.lightCanvas = document.createElement('canvas');
+    const lightContext = this.lightCanvas.getContext('2d');
+    if (!lightContext) throw new Error('Light Canvas 2D context unavailable');
+    this.lightCtx = lightContext;
     this.callbacks = callbacks;
 
     for (let i = 0; i < POOL_SIZE; i++) {
@@ -275,7 +314,20 @@ export class GameEngine {
     }
 
     this.state = this.buildInitialWorld('pip', 198477);
+    try {
+      const localPrefs = readPreferences(localStorage);
+      const prefs = localPrefs ?? readSavePreferences(localStorage);
+      if (prefs) {
+        this.preferencesChanged = Boolean(localPrefs);
+        this.state.audioSettings = prefs.audio;
+        this.state.reducedMotionOverride = prefs.motion;
+        this.state.reducedMotion = prefs.motion ?? this.motionPreference.matches;
+      }
+    } catch {
+      // A blocked storage getter should not prevent play.
+    }
     this.audio.applySettings(this.state.audioSettings);
+    this.syncComfort();
     this.syncSize();
     this.attachEvents();
   }
@@ -285,29 +337,30 @@ export class GameEngine {
   }
 
   public startLoop(): void {
-    if (this.rafId || this.destroyed) return;
-    this.lastTs = performance.now();
-    let elapsed = 0;
-    const tick = (now: number) => {
-      if (this.destroyed) return;
-      elapsed += document.hidden ? 0 : Math.min(0.1, Math.max(0, (now - this.lastTs) / 1000));
-      this.lastTs = now;
-      while (elapsed >= SIMULATION_STEP) {
-        this.update(SIMULATION_STEP);
-        elapsed -= SIMULATION_STEP;
-      }
-
-      const isStaticPaused = this.mode === 'title' || this.mode === 'paused' || (this.activeModal !== null && !this.danceState);
-      if (!document.hidden && (!isStaticPaused || !this.pausedRendered)) {
-        this.render();
-        this.pausedRendered = isStaticPaused;
-      }
-
-      this.rafId = requestAnimationFrame(tick);
-    };
-    this.rafId = requestAnimationFrame(tick);
+    if (this.loopStarted || this.destroyed) return;
+    this.loopStarted = true;
+    this.handleVisibility();
     this.emitHud();
   }
+
+  private tick = (now: number): void => {
+    this.rafId = 0;
+    if (this.destroyed || document.hidden) return;
+    const dt = clampFrameSeconds(now - this.lastTs);
+    this.lastTs = now;
+    this.frameRemainder += dt;
+    while (this.frameRemainder >= SIMULATION_STEP) {
+      this.update(SIMULATION_STEP);
+      this.frameRemainder -= SIMULATION_STEP;
+    }
+    const still = this.mode !== 'playing' || (this.activeModal !== null && !this.danceState);
+    if (!still || !this.pausedRendered) {
+      this.render();
+      this.pausedRendered = still;
+    }
+    this.audio.measure(dt);
+    this.rafId = requestAnimationFrame(this.tick);
+  };
 
   public destroy(): void {
     this.destroyed = true;
@@ -317,8 +370,10 @@ export class GameEngine {
     window.removeEventListener('resize', this.syncSize);
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
+    window.removeEventListener('pointerdown', this.handleAudioGesture, true);
     window.removeEventListener('blur', this.clearInputs);
     document.removeEventListener('visibilitychange', this.handleVisibility);
+    this.motionPreference.removeEventListener('change', this.handleMotionPreference);
     this.canvas.removeEventListener('touchstart', this.handleTouchStart);
     this.canvas.removeEventListener('touchmove', this.handleTouchMove);
     this.canvas.removeEventListener('touchend', this.handleTouchEnd);
@@ -332,6 +387,10 @@ export class GameEngine {
     if (w !== this.canvas.width || h !== this.canvas.height) {
       this.canvas.width = w;
       this.canvas.height = h;
+      this.worldCanvas.width = w;
+      this.worldCanvas.height = h;
+      this.lightCanvas.width = w;
+      this.lightCanvas.height = h;
       this.pausedRendered = false;
     }
     this.width = w;
@@ -347,13 +406,19 @@ export class GameEngine {
     }
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('keyup', this.handleKeyUp);
+    window.addEventListener('pointerdown', this.handleAudioGesture, true);
     window.addEventListener('blur', this.clearInputs);
     document.addEventListener('visibilitychange', this.handleVisibility);
+    this.motionPreference.addEventListener('change', this.handleMotionPreference);
     this.canvas.addEventListener('touchstart', this.handleTouchStart, { passive: false });
     this.canvas.addEventListener('touchmove', this.handleTouchMove, { passive: false });
     this.canvas.addEventListener('touchend', this.handleTouchEnd);
     this.canvas.addEventListener('touchcancel', this.handleTouchEnd);
   }
+
+  private handleAudioGesture = (): void => {
+    if (this.mode === 'playing') this.audio.unlock();
+  };
 
   private clearInputs = (): void => {
     this.heldKeys.clear();
@@ -366,10 +431,49 @@ export class GameEngine {
 
   private handleVisibility = (): void => {
     this.lastTs = performance.now();
-    if (document.hidden) this.clearInputs();
+    this.frameRemainder = 0;
+    this.audio.setHidden(document.hidden);
+    if (document.hidden) {
+      this.clearInputs();
+      this.clearPerception();
+      cancelAnimationFrame(this.rafId);
+      this.rafId = 0;
+      this.emitHud();
+    } else if (this.loopStarted && !this.rafId) {
+      this.rafId = requestAnimationFrame(this.tick);
+    }
   };
 
+  private handleMotionPreference = (): void => {
+    if (this.state.reducedMotionOverride != null) return;
+    this.state.reducedMotion = this.motionPreference.matches;
+    this.syncComfort();
+    this.emitHud();
+  };
+
+  private clearPerception(): void {
+    this.perception.reset();
+    this.visualCues.clear();
+    this.waterRipples.length = 0;
+    this.lastWeatherCue = null;
+    this.criticalMelt = false;
+    this.resonantLandmark = null;
+    this.pausedRendered = false;
+  }
+
+  private syncComfort(): void {
+    const { audioSettings, reducedMotion } = this.state;
+    document.body.dataset.reducedMotion = String(reducedMotion);
+    this.perception.setComfort(reducedMotion, audioSettings.flashFree, audioSettings.perceptionIntensity);
+    if (audioSettings.perceptionIntensity === 0) this.waterRipples.length = 0;
+    this.pausedRendered = false;
+  }
+
   private handleKeyDown = (e: KeyboardEvent): void => {
+    if (this.mode === 'title' && e.code === 'Escape' && this.activeModal === 'settings' && !e.defaultPrevented) {
+      this.setActiveModal(null);
+      return;
+    }
     if (this.mode === 'title' || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
     const target = e.target instanceof Element ? e.target : null;
     if (e.code !== 'Escape' && target?.closest('input, select, textarea, [contenteditable]')) return;
@@ -378,12 +482,12 @@ export class GameEngine {
 
     if (e.code === 'Escape' || e.code === 'KeyP') {
       if (e.repeat) return;
-      if (this.mode === 'paused') {
-        this.setMode('playing');
-        return;
-      }
       if (this.activeModal) {
         this.setActiveModal(null);
+        return;
+      }
+      if (this.mode === 'paused') {
+        this.setMode('playing');
         return;
       }
       if (this.buildingMove) {
@@ -427,7 +531,7 @@ export class GameEngine {
         return;
       }
       if (e.code === 'KeyC') {
-        this.toggleModal('craft');
+        this.toggleModal(this.steamHeatTimer > 0 ? 'cook' : 'craft');
         return;
       }
       if (e.code === 'KeyV') {
@@ -533,9 +637,11 @@ export class GameEngine {
 
   public setMode(next: GameMode): void {
     this.mode = next;
+    this.audio.setPaused(next !== 'playing' || this.activeModal !== null);
     if (next === 'title' || next === 'gameover') {
       this.buildingMove = null;
       this.trailRun = null;
+      this.clearPerception();
     }
     document.body.dataset.state = next;
     this.pausedRendered = false;
@@ -546,6 +652,7 @@ export class GameEngine {
 
   public setActiveModal(modal: ModalType, payload?: { creatureId?: string; residentId?: string; plotId?: string; buildingId?: string }): void {
     this.activeModal = modal;
+    this.audio.setPaused(this.mode !== 'playing' || modal !== null);
     this.pausedRendered = false;
     if (modal) this.clearInputs();
     if (modal !== 'dance') this.danceState = null;
@@ -562,30 +669,47 @@ export class GameEngine {
   }
 
   public toggleMute(): void {
+    const { master, muted } = this.state.audioSettings;
+    this.updateAudioSettings(master === 0
+      ? { master: DEFAULT_AUDIO_SETTINGS.master, muted: false }
+      : { muted: !muted });
+  }
+
+  public restoreDefaultEffects(): void {
+    const { master, music, ambience, effects, perceptionIntensity } = DEFAULT_AUDIO_SETTINGS;
+    this.updateAudioSettings({ master, music, ambience, effects, perceptionIntensity, muted: false });
+    this.audio.ding();
+  }
+
+  public previewSoundEffects(): void {
     this.audio.unlock();
-    this.state.audioSettings.muted = !this.state.audioSettings.muted;
-    this.audio.applySettings(this.state.audioSettings);
-    if (this.mode === 'playing') this.saveGame(true);
-    this.emitHud();
+    this.audio.tripFor('prism_refract');
   }
 
   public updateAudioSettings(partial: Partial<AudioSettings>): void {
-    this.audio.unlock();
-    this.state.audioSettings = { ...this.state.audioSettings, ...partial };
+    this.state.audioSettings = normalizeAudioSettings({ ...this.state.audioSettings, ...partial });
     this.audio.applySettings(this.state.audioSettings);
-    if (this.mode === 'playing') this.saveGame(true);
+    this.audio.unlock();
+    this.syncComfort();
+    this.persistPreferences();
     this.emitHud();
   }
 
-  public toggleReducedMotion(): void {
-    this.state.reducedMotion = !this.state.reducedMotion;
-    this.callbacks.onToast(
-      this.state.reducedMotion
-        ? 'Reduced Motion enabled: gentler sway, clear static timing arrows.'
-        : 'Standard Motion restored.',
-    );
-    if (this.mode === 'playing') this.saveGame(true);
+  public setReducedMotion(override: boolean | null): void {
+    this.state.reducedMotionOverride = override;
+    this.state.reducedMotion = override ?? this.motionPreference.matches;
+    this.syncComfort();
+    this.persistPreferences();
     this.emitHud();
+  }
+
+  private persistPreferences(): void {
+    this.preferencesChanged = true;
+    try {
+      writePreferences(localStorage, this.state.audioSettings, this.state.reducedMotionOverride ?? null);
+    } catch {
+      // Browser storage can be blocked even before the write.
+    }
   }
 
   public setWaypoint(wp: Waypoint | null): void {
@@ -634,6 +758,11 @@ export class GameEngine {
           : 'This save could not be loaded. The original is still in browser storage.');
         return false;
       }
+      if (this.preferencesChanged) {
+        migrated.audioSettings = this.state.audioSettings;
+        migrated.reducedMotionOverride = this.state.reducedMotionOverride;
+        migrated.reducedMotion = this.state.reducedMotion;
+      }
       this.state = migrated;
       this.prepareRun();
       this.audio.unlock();
@@ -650,16 +779,17 @@ export class GameEngine {
   public startNewGame(charId: CharacterId): void {
     this.audio.unlock();
     const seed = Math.floor(100000 + Math.random() * 899999);
-    const { audioSettings, reducedMotion, fishingToggleAssist } = this.state;
+    const { audioSettings, reducedMotion, reducedMotionOverride, fishingToggleAssist } = this.state;
     this.state = this.buildInitialWorld(charId, seed);
     this.state.audioSettings = { ...audioSettings };
     this.state.reducedMotion = reducedMotion;
+    this.state.reducedMotionOverride = reducedMotionOverride;
     this.state.fishingToggleAssist = fishingToggleAssist;
     this.prepareRun();
     this.setMode('playing');
     const ch = CHARACTERS[charId];
     this.callbacks.onToast(
-      `Welcome, ${ch.name}! Check the Damp Ferry Note in Mailbox Square, or open Atlas (G) to plot your route!`,
+      `Welcome, ${ch.name}! Open the Camp Ledger (H) for the Singing Millpond, or read the Damp Ferry Note in Mailbox Square.`,
     );
   }
 
@@ -679,18 +809,18 @@ export class GameEngine {
     this.buildingMove = null;
     this.foldSpanTimer = 0;
     this.guideLineTimer = 0;
+    this.lanternGlow = null;
+    this.steamHeatTimer = 0;
+    this.companionBellTimer = 0;
     this.discoveryTimer = 0;
     this.pearChimeCd = 0;
     this.stepSoundAccum = 0;
     this.hudTimer = 0;
-    this.tracerTimer = 0;
-    this.phantomSpawnTimer = 0;
     this.ferryCallTimer = 3.5;
     this.lastDockDisturbed = false;
-    this.playerTracers = [];
-    this.soundRipples = [];
-    this.waterRipples = [];
-    this.badTripPhantoms = [];
+    this.shelteredAtRefuge = false;
+    this.clearPerception();
+    this.syncComfort();
     this.lastBadTripNotice = false;
     for (const particle of this.particles) particle.active = false;
     this.nearestPrompt = this.computeNearestPrompt();
@@ -939,6 +1069,7 @@ export class GameEngine {
     return {
       version: SAVE_VERSION,
       camp: createCampProgress(),
+      expeditions: newExpeditions(),
       worldSeed,
       time: 0,
       dayTime: 8,
@@ -971,7 +1102,8 @@ export class GameEngine {
         'Follow Groove Highway northwest to the Listening Booth and Radio Unmelted in Dead Air Basin.',
       ],
       audioSettings: { ...DEFAULT_AUDIO_SETTINGS },
-      reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+      reducedMotion: this.motionPreference.matches,
+      reducedMotionOverride: null,
       stats: {
         harvests: 0,
         tripsTaken: 0,
@@ -1211,8 +1343,8 @@ export class GameEngine {
         this.state.trips = {};
         this.state.tripMaxDur = {};
         p.wobble = Math.max(8, p.wobble + (it.wob || -68));
-        this.badTripPhantoms = [];
-        this.playerTracers = [];
+
+
         this.lastBadTripNotice = false;
         this.audio.groundingSigh();
         this.callbacks.onToast(
@@ -1287,6 +1419,7 @@ export class GameEngine {
         life: 1.15,
         damage: 42,
         color: '#4cc9f0',
+        pierced: [],
       });
       this.addPopup(p.x, p.y - 44, 'EXPRESS DELIVERY!', '#4cc9f0');
     } else if (ch.ability.id === 'spill_tea') {
@@ -1352,17 +1485,9 @@ export class GameEngine {
     } else if (ch.ability.id === 'lend_glow') {
       p.vibe = Math.min(p.maxVibe, p.vibe + 16);
       p.wobble = Math.max(0, p.wobble - 14);
+      this.lanternGlow = { x: p.x, y: p.y, time: 8 };
       this.burst(p.x, p.y - 16, '#ff9f1c', 24, 175);
-      this.soundRipples.push({
-        x: p.x,
-        y: p.y - 12,
-        radius: 16,
-        maxRadius: 150,
-        color: '#ff9f1c',
-        glyph: '✦',
-        life: 1.4,
-        maxLife: 1.4,
-      });
+      this.audio.cue('Lantern glow', 'bell', { x: p.x, y: p.y - 12 }, 'effects');
       for (const c of this.state.creatures) {
         if (CREATURE_DEFS[c.type].hostile && Math.hypot(c.x - p.x, c.y - p.y) < 250) {
           c.frozenTimer = 2.8;
@@ -1374,6 +1499,7 @@ export class GameEngine {
       this.addPopup(p.x, p.y - 44, 'LEND GLOW! +16 Vibe · Calmed', '#ff9f1c');
     } else if (ch.ability.id === 'high_water_mark') {
       this.foldSpanTimer = 5.5;
+      this.guideLineTimer = 5.5;
       this.burst(p.x, p.y - 16, '#2ec4b6', 24, 190);
       this.spawnWaterRipple(p.x, p.y, '#2ec4b6', 78);
       for (const c of this.state.creatures) {
@@ -1386,20 +1512,12 @@ export class GameEngine {
       }
       this.addPopup(p.x, p.y - 44, 'HIGH-WATER MARK! Ink Footing', '#2ec4b6');
     } else if (ch.ability.id === 'wall_tap') {
+      const echoListener = hasPerk(this.getDisciplines(), 'echo_listener');
       this.audio.tuningForkChord();
       this.burst(p.x, p.y - 16, '#b388ff', 26, 200);
-      this.soundRipples.push({
-        x: p.x,
-        y: p.y - 12,
-        radius: 14,
-        maxRadius: 185,
-        color: '#b388ff',
-        glyph: '♪',
-        life: 1.5,
-        maxLife: 1.5,
-      });
+      this.audio.cue('Wall tap', 'bell', { x: p.x, y: p.y - 12 }, 'music');
       for (const c of this.state.creatures) {
-        if (Math.hypot(c.x - p.x, c.y - p.y) < 290) {
+        if (Math.hypot(c.x - p.x, c.y - p.y) < (echoListener ? 480 : 290)) {
           c.danceTimer = 4.2;
           c.frozenTimer = 2.6;
           c.aiState = 'idle';
@@ -1412,10 +1530,11 @@ export class GameEngine {
           b.growth = Math.min(CROPS[b.crop].time, b.growth + 8);
         }
       }
-      this.awardPractice('acoustics', 'bea_wall_tap', 10);
+      if (getBiomeAt(p.x, p.y).id === 'undertone_caverns') this.awardPractice('acoustics', 'bea_wall_tap_caverns', 20);
       this.addPopup(p.x, p.y - 44, 'WALL TAP! Harmonic Echo', '#b388ff');
     } else if (ch.ability.id === 'steam_vent') {
       p.vibe = Math.min(p.maxVibe, p.vibe + 20);
+      this.steamHeatTimer = 10;
       this.burst(p.x, p.y - 16, '#72efdd', 28, 210);
       for (const c of this.state.creatures) {
         const d = Math.hypot(c.x - p.x, c.y - p.y);
@@ -1448,6 +1567,15 @@ export class GameEngine {
         color: '#72efdd',
       });
       this.audio.glassChime();
+      for (const b of this.state.buildings) {
+        if (b.type === 'mood_plot' && b.crop && within(p.x, p.y, b, 220)) {
+          b.growth = Math.min(CROPS[b.crop].time, b.growth + 6);
+          this.tryHybridize(b);
+        }
+      }
+      for (const c of this.state.creatures) {
+        if (c.aiState !== 'ko' && within(p.x, p.y, c, 185)) c.danceTimer = Math.max(c.danceTimer, 2);
+      }
       this.burst(p.x, p.y - 18, '#72efdd', 20, 185);
       this.addPopup(p.x, p.y - 44, 'SPLIT SUNBEAM! Crystals Lit', '#72efdd');
     } else if (ch.ability.id === 'reed_float') {
@@ -1478,12 +1606,13 @@ export class GameEngine {
 
   private isNearCampKitchen(): boolean {
     const p = this.state.player;
-    return this.state.buildings.some(
+    return this.steamHeatTimer > 0 || this.state.buildings.some(
       (b) => (b.type === 'camp_table' || b.type === 'funk_blender') && Math.hypot(b.x - p.x, b.y - p.y) < 185,
     );
   }
 
   private spawnWaterRipple(x: number, y: number, color = '#90e0ef', maxRadius = 46): void {
+    if (this.state.audioSettings.perceptionIntensity === 0) return;
     if (this.waterRipples.length > 26) this.waterRipples.shift();
     this.waterRipples.push({ x, y, radius: 6, maxRadius, color, age: 0, maxAge: 0.9 });
   }
@@ -1495,10 +1624,11 @@ export class GameEngine {
     return this.state.disciplines;
   }
 
-  private awardPractice(disc: DisciplineId, actionKey: string, baseXp: number): void {
+  private awardPractice(disc: DisciplineId, actionKey: string, baseXp: number, adventureXp = 0): void {
     const all = this.getDisciplines();
-    const res = awardDisciplinePractice(all[disc], actionKey, baseXp);
+    const res = awardDisciplinePractice(all[disc], actionKey, baseXp, this.state.day);
     all[disc] = res.next;
+    if (adventureXp && res.gainedXp) this.gainXP(Math.max(1, Math.round(adventureXp * res.gainedXp / baseXp)));
     if (res.promoted) {
       const def = DISCIPLINES[disc];
       this.audio.questFanfare();
@@ -1572,7 +1702,8 @@ export class GameEngine {
             note: 'Turns toward an intact dock lamp reflection at Delta Public Bank and vanishes whenever a ferry wake or drifting plank breaks the water.',
           });
         }
-        this.awardPractice('field_botany', 'observe_mirror_minnow', 30);
+          this.awardPractice('field_botany', 'observe_mirror_minnow',
+            hasPerk(this.getDisciplines(), 'field_naturalist') ? 41 : 30);
         this.callbacks.onToast(
           `Moved Dock Lamp to ${slot.label}! A silvery Mirror Minnow turned into the reflection — sketched in your Field Journal!`,
         );
@@ -1589,8 +1720,10 @@ export class GameEngine {
   }
 
   public startCast(slotIdx?: number): void {
-    if (!this.isNearDock()) {
-      this.callbacks.onToast('Stand at Delta Public Bank to borrow the loaner reed rod and cast.');
+    const p = this.state.player;
+    const millpond = millpondBankAt(p.x, p.y);
+    if (!millpond && !this.isNearDock()) {
+      this.callbacks.onToast('Stand at a Millpond bank or Delta Public Bank to borrow a reed rod and cast.');
       return;
     }
     if (this.fishing.active && this.fishing.phase !== 'idle' && this.fishing.phase !== 'landed' && this.fishing.phase !== 'escaped') {
@@ -1599,7 +1732,6 @@ export class GameEngine {
     const targetSlot = (slotIdx !== undefined ? Math.max(0, Math.min(2, slotIdx)) : this.selectedCastSlot) as 0 | 1 | 2;
     this.selectedCastSlot = targetSlot;
 
-    const p = this.state.player;
     const f = this.state.worldFlags;
     const refl = computeDockReflectionState(this.state.time, f.dockLampSlot, f.ferryRestored);
     const hasBait = (this.state.inv.fizz_berry || 0) > 0;
@@ -1611,15 +1743,17 @@ export class GameEngine {
       f.dockLampSlot,
       refl.reflectionIntegrity,
       {
-        usingPrismReel: Boolean(p.gear.prismReel),
+        usingPrismReel: !millpond && Boolean(p.gear.prismReel),
         hasBellLure: (this.state.inv.bell_lure || 0) > 0,
         baitId: hasBait ? 'fizz_berry' : '',
         currentReaderPerk: hasPerk(discs, 'current_reader'),
         stillwaterPerk: hasPerk(discs, 'stillwater_keeper'),
         brinBonus: p.charId === 'brin' || this.guideLineTimer > 0,
+        millpond,
       },
     );
     this.audio.waterPlop();
+    this.audio.cue('Cast splash', 'fish', { x: this.fishing.bobberX, y: this.fishing.bobberY });
     this.spawnWaterRipple(this.fishing.bobberX, this.fishing.bobberY, '#90e0ef', 42);
     this.emitHud();
   }
@@ -1634,6 +1768,7 @@ export class GameEngine {
     this.fishing = next;
     if (hooked) {
       this.audio.corkSqueak();
+      this.audio.cue('Fish hooked', 'fish', { x: this.fishing.bobberX, y: this.fishing.bobberY });
       this.spawnWaterRipple(this.fishing.bobberX, this.fishing.bobberY, '#ffd166', 58);
       this.burst(this.fishing.bobberX, this.fishing.bobberY, '#ffd166', 12, 125);
     }
@@ -1646,6 +1781,7 @@ export class GameEngine {
     this.fishing = next;
     if (hooked) {
       this.audio.corkSqueak();
+      this.audio.cue('Fish hooked', 'fish', { x: this.fishing.bobberX, y: this.fishing.bobberY });
       this.spawnWaterRipple(this.fishing.bobberX, this.fishing.bobberY, '#ffd166', 58);
     }
     this.emitHud();
@@ -1684,6 +1820,10 @@ export class GameEngine {
   }
 
   public cookRecipe(recipeId: string): void {
+    if (!this.isNearCampKitchen()) {
+      this.callbacks.onToast('Cook near a camp kitchen or while Steam Vent is active.');
+      return;
+    }
     const rec = COOKING_RECIPES.find((r) => r.id === recipeId);
     if (!rec) return;
 
@@ -1711,8 +1851,7 @@ export class GameEngine {
     const totalOut = 1 + extraServing;
     this.giveItem(rec.outId, totalOut);
     this.state.stats.mealsCooked = (this.state.stats.mealsCooked || 0) + 1;
-    this.awardPractice('cookery', `cook_${rec.id}`, 32);
-    this.gainXP(18);
+    this.awardPractice('cookery', `cook_${rec.id}`, 32, 18);
     this.audio.ding();
     this.burst(this.state.player.x, this.state.player.y - 18, '#ff9f1c', 16, 130);
     this.callbacks.onToast(
@@ -1722,6 +1861,7 @@ export class GameEngine {
   }
 
   public cookExperimental(idA: string, idB: string): void {
+    if (!this.isNearCampKitchen()) return;
     if (!idA || !idB) return;
     if (idA === idB) {
       if ((this.state.inv[idA] || 0) < 2) return;
@@ -1775,16 +1915,7 @@ export class GameEngine {
     this.audio.questFanfare();
     if (table) {
       this.burst(table.x, table.y - 16, '#ffd166', 28, 170);
-      this.soundRipples.push({
-        x: table.x,
-        y: table.y - 12,
-        radius: 12,
-        maxRadius: 120,
-        color: '#ffd166',
-        glyph: '♫',
-        life: 1.4,
-        maxLife: 1.4,
-      });
+      this.audio.cue('Ferry supper call', 'bell', { x: table.x, y: table.y - 12 }, 'music');
     }
     this.addJournalNote(
       f.ferryRestored
@@ -1846,16 +1977,7 @@ export class GameEngine {
       const table = this.getFerrySupperTable();
       if (table) {
         table.hasSecondSetting = true;
-        this.soundRipples.push({
-          x: table.x,
-          y: table.y - 16,
-          radius: 14,
-          maxRadius: 135,
-          color: '#72efdd',
-          glyph: '♫',
-          life: 1.6,
-          maxLife: 1.6,
-        });
+        this.audio.cue('Ferry call', 'bell', { x: table.x, y: table.y - 16 }, 'music');
       }
       this.audio.ferryTwoNoteCall();
       this.callbacks.onToast(
@@ -1912,6 +2034,232 @@ export class GameEngine {
     this.setWaypoint({ x: site.x, y: site.y, label });
   }
 
+  public pinFishingBank(): void {
+    this.setActiveModal(null);
+    this.setWaypoint({ x: DELTA_BANK_X, y: DELTA_BANK_Y, label: 'Delta Public Bank' });
+  }
+
+  public startMillpond(): void {
+    const trip = this.state.expeditions.millpond;
+    if (trip.status === 'unstarted') {
+      trip.status = 'active';
+      trip.perchLanded ||= (this.state.inv.reed_perch ?? 0) > 0;
+      this.giveItem('ribbon_stake', 3);
+      this.addJournalNote('Millpond fieldwork: tie two ribbons, land a Reed Perch, and gather two Cool-Mint sprigs.');
+      this.saveGame(true);
+    }
+    this.pinExpedition('millpond');
+  }
+
+  public startHollow(role: HollowRole): void {
+    const { millpond, hollow } = this.state.expeditions;
+    if (millpond.status !== 'restored' || hollow.status !== 'unstarted') return;
+    hollow.status = 'active';
+    hollow.role = role;
+    this.giveItem('ribbon_stake', 6);
+    this.giveItem('cooling_draught', 2);
+    this.addJournalNote('Red-Chalk Hollow: bring back three Chalk-Quartz, tie two ribbons, recover the supply pack, and escort the companion to the trailhead.');
+    this.saveGame(true);
+    this.pinExpedition('hollow');
+  }
+
+  public pinExpedition(id: 'millpond' | 'hollow'): void {
+    const { millpond, hollow } = this.state.expeditions;
+    let next: Waypoint;
+    if (id === 'millpond') {
+      const firstRibbon = MILLPOND_RIBBONS.find((_, index) => !hasSite(millpond.ribbons, index));
+      next = millpondReady(millpond) ? GROVE_CAMP : firstRibbon ?? MILLPOND;
+    } else {
+      const p = this.state.player;
+      const atTrailhead = within(p.x, p.y, HOLLOW_SHELTER, HOLLOW_SAFE_RADIUS);
+      const ribbon = HOLLOW_RIBBONS.find((_, index) => !hasSite(hollow.ribbons, index));
+      const quartz = HOLLOW_QUARTZ.find((_, index) => !hasSite(hollow.quartz, index));
+      if ((!atTrailhead && !hollow.day) || (hollow.escorted && hollowReady(hollow))) next = HOLLOW_SHELTER;
+      else if (countSites(hollow.ribbons) < 2 && ribbon) next = ribbon;
+      else if (quartz) next = quartz;
+      else next = hollow.packed ? HOLLOW_SHELTER : HOLLOW_PACK;
+    }
+    this.setActiveModal(null);
+    this.setWaypoint(next);
+  }
+
+  public finishMillpond(): void {
+    const p = this.state.player;
+    const trip = this.state.expeditions.millpond;
+    if (trip.status !== 'active' || !millpondReady(trip) || !within(p.x, p.y, GROVE_CAMP, 220)) return;
+    trip.status = 'restored';
+    trip.mintDay = this.state.day;
+    trip.dailyMint = trip.mint;
+    this.awardPractice('wayfinding', 'millpond_restored', 38);
+    this.gainXP(35);
+    this.addJournalNote('The Singing Millpond is restored. Cool-Mint Brew is available in Craft.');
+    this.audio.questFanfare();
+    this.audio.cue('Millpond restored', 'bell', MILLPOND);
+    this.callbacks.onToast('Millpond restored. Cool-Mint Brew unlocked.');
+    this.saveGame(true);
+    this.emitHud();
+  }
+
+  public bankHollowQuartz(): void {
+    const p = this.state.player;
+    const { hollow } = this.state.expeditions;
+    if (hollow.status !== 'active' || !within(p.x, p.y, HOLLOW_SHELTER, HOLLOW_SAFE_RADIUS)) return;
+    const amount = Math.min(3 - hollow.bankedQuartz, this.state.inv.chalk_quartz ?? 0);
+    if (!amount || !this.takeItem('chalk_quartz', amount)) return;
+    hollow.bankedQuartz += amount;
+    this.callbacks.onToast(`Banked ${amount} Chalk-Quartz at the trailhead.`);
+    this.saveGame(true);
+    this.emitHud();
+  }
+
+  public waitForHollowSquall(): void {
+    const p = this.state.player;
+    const { hollow } = this.state.expeditions;
+    if (hollow.status !== 'active' || !within(p.x, p.y, HOLLOW_SHELTER, HOLLOW_SAFE_RADIUS)) return;
+    if (this.state.dayTime > 49) {
+      this.runCampShift(false);
+      this.state.day++;
+      this.state.stats.daysSurvived = this.state.day;
+    }
+    this.state.dayTime = 49;
+    hollow.day = 0;
+    hollow.elapsed = 0;
+    this.callbacks.onToast('Afternoon at the trailhead. The squall will build shortly after you leave shelter.');
+    this.saveGame(true);
+    this.emitHud();
+  }
+
+  public finishHollow(): void {
+    const p = this.state.player;
+    const { hollow } = this.state.expeditions;
+    if (hollow.status !== 'active' || !hollowReady(hollow) || !within(p.x, p.y, HOLLOW_SHELTER, HOLLOW_SAFE_RADIUS)) return;
+    this.bankHollowQuartz();
+    if (hollow.bankedQuartz < 3) return;
+    hollow.status = 'restored';
+    this.giveItem('hollow_waterwheel_plan', 1);
+    this.giveItem('bottlecap', 24);
+    this.awardPractice('wayfinding', 'hollow_restored', 62);
+    this.awardPractice('creature_care', 'hollow_escort', 48);
+    this.gainXP(65);
+    this.addJournalNote('Restored the Hollow Waterwheel. Its sheltered channel reduces local melt pressure by 25%.');
+    this.audio.questFanfare();
+    this.audio.cue('Waterwheel restored', 'bell', HOLLOW);
+    this.callbacks.onToast('Waterwheel restored. Hollow melt pressure is 25% lower.');
+    this.saveGame(true);
+    this.emitHud();
+  }
+
+  public shareHollowDraught(): void {
+    const p = this.state.player;
+    const { hollow } = this.state.expeditions;
+    if (hollow.status !== 'active' || !hollow.packed || hollow.escorted || hollow.sharedDraught ||
+        !within(p.x, p.y, { x: hollow.escortX, y: hollow.escortY }, 115) || !this.takeItem('cooling_draught', 1)) return;
+    hollow.sharedDraught = true;
+    this.audio.cue('Companion steadied', 'bell');
+    this.callbacks.onToast('The companion can keep pace now.');
+    this.saveGame(true);
+    this.emitHud();
+  }
+
+  private useExpeditionAction(action: ExpeditionAction): void {
+    const { millpond, hollow } = this.state.expeditions;
+    const bit = 1 << action.index;
+    if (action.type === 'millpond_ribbon' || action.type === 'hollow_ribbon') {
+      if (!this.takeItem('ribbon_stake', 1)) {
+        this.callbacks.onToast('Craft Ribbon Stakes from one Rubber Wood, then return to this fork.');
+        return;
+      }
+      const trip = action.type === 'millpond_ribbon' ? millpond : hollow;
+      trip.ribbons |= bit;
+      this.audio.cue('Ribbon tied', 'tool', action.point);
+      this.audio.ding();
+      this.awardPractice('wayfinding', `ribbon_${action.type}_${action.index}`, 12);
+      if (action.type === 'millpond_ribbon') {
+        const next = MILLPOND_RIBBONS.find((_, index) => !hasSite(millpond.ribbons, index)) ?? MILLPOND;
+        this.state.waypoint = next;
+      }
+    } else if (action.type === 'mint') {
+      if (millpond.status === 'restored') {
+        if (millpond.mintDay !== this.state.day) millpond.dailyMint = 0;
+        millpond.mintDay = this.state.day;
+        millpond.dailyMint |= bit;
+      } else {
+        millpond.mint |= bit;
+      }
+      this.giveItem('cool_mint', 1);
+      this.audio.harvest();
+      this.audio.cue('Cool-Mint gathered', 'tool', action.point);
+    } else if (action.type === 'quartz') {
+      hollow.quartz |= bit;
+      this.giveItem('chalk_quartz', 1);
+      if (hollow.role === 'hauler' && countSites(hollow.quartz) === 1) this.state.camp.provisions = Math.min(MAX_CAMP_PROVISIONS, this.state.camp.provisions + 1);
+      this.audio.glassChime();
+      this.audio.cue('Quartz chime', 'tool', action.point);
+      if (countSites(hollow.quartz) >= 3 && !hollow.packed) this.state.waypoint = HOLLOW_PACK;
+    } else {
+      hollow.packed = true;
+      this.audio.cue('Companion bell', 'bell', HOLLOW_PACK);
+      this.callbacks.onToast('Supply pack secured. Walk with the companion to the sheltered trailhead.');
+      this.state.waypoint = HOLLOW_SHELTER;
+    }
+    if (millpond.status === 'active' && millpondReady(millpond) && action.type === 'mint') this.state.waypoint = GROVE_CAMP;
+    this.saveGame(true);
+    this.emitHud();
+  }
+
+  private tickHollow(dt: number): boolean {
+    const { hollow } = this.state.expeditions;
+    const p = this.state.player;
+    if (hollow.status === 'unstarted' || !within(p.x, p.y, HOLLOW, HOLLOW_ZONE_RADIUS)) return false;
+    const sheltered = within(p.x, p.y, HOLLOW_SHELTER, HOLLOW_SAFE_RADIUS);
+    if (hollow.status === 'active' && !sheltered && hollow.day !== this.state.day) {
+      hollow.day = this.state.day;
+      hollow.elapsed = 0;
+      this.audio.cue('Hollow squall approaching', 'wind', HOLLOW, 'ambience', 'urgent');
+    }
+    const squall = hollow.status === 'active' && hollow.day === this.state.day && hollow.elapsed < 180;
+    if (squall) {
+      const before = hollow.elapsed;
+      hollow.elapsed = Math.min(180, hollow.elapsed + dt);
+      if (before < 12 && hollow.elapsed >= 12) this.audio.cue('Storm front', 'wind', HOLLOW, 'ambience', 'urgent');
+      if (before < 32 && hollow.elapsed >= 32) this.audio.cue('Squall peak', 'wind', HOLLOW, 'ambience', 'urgent');
+      if (!sheltered) {
+        const onTrail = HOLLOW_RIBBONS.some((ribbon, index) => hasSite(hollow.ribbons, index) && within(p.x, p.y, ribbon, 190));
+        p.vibe -= hollowPressure(hollow.elapsed, false, hollow.role, onTrail) * dt;
+        p.wobble = Math.min(84, p.wobble + dt * 1.5);
+      }
+      this.companionBellTimer -= dt;
+      if (this.companionBellTimer <= 0) {
+        const point = hollow.escorted ? HOLLOW_COMPANION_HOME : hollow.packed ? { x: hollow.escortX, y: hollow.escortY } : HOLLOW_PACK;
+        if (within(p.x, p.y, point, 870)) {
+          this.audio.landmarkChime('guide-moth');
+          this.audio.cue('Companion bell', 'bell', point, 'music');
+        }
+        this.companionBellTimer = hollow.role === 'anchor' ? 4.2 : 7;
+      }
+    } else if (hollow.status === 'restored' && !sheltered) {
+      p.vibe -= hollowPressure(0, true, 'anchor', false) * dt;
+    }
+    if (hollow.packed && !hollow.escorted) {
+      const dx = p.x - hollow.escortX;
+      const dy = p.y - hollow.escortY;
+      const gap = Math.hypot(dx, dy);
+      const speed = hollow.sharedDraught ? 260 : hollow.role === 'anchor' ? 200 : 165;
+      if (gap > 62 && gap < 350) {
+        const step = Math.min(gap - 62, speed * dt);
+        hollow.escortX += (dx / gap) * step;
+        hollow.escortY += (dy / gap) * step;
+      }
+      if (sheltered && within(hollow.escortX, hollow.escortY, HOLLOW_SHELTER, HOLLOW_SAFE_RADIUS)) {
+        hollow.escorted = true;
+        this.audio.cue('Companion safe', 'bell', HOLLOW_COMPANION_HOME);
+        this.callbacks.onToast('Companion safe. Open the Camp Ledger to bank quartz or restore the Waterwheel.');
+        this.saveGame(true);
+      }
+    }
+    return squall && hollow.elapsed >= 12;
+  }
+
   public stockCamp(direction: 'deposit' | 'withdraw'): void {
     const site = this.getCampAnchor();
     const p = this.state.player;
@@ -1930,6 +2278,7 @@ export class GameEngine {
   }
 
   public setCampJob(creatureId: string, job: CampJob | null): void {
+    if (job === 'relay' && this.state.expeditions.hollow.status !== 'restored') return;
     if (!this.state.creatures.some((creature) => creature.id === creatureId && creature.tamed)) return;
     if (job && Object.hasOwn(CAMP_JOBS, job)) this.state.camp.jobs[creatureId] = job;
     else delete this.state.camp.jobs[creatureId];
@@ -1957,6 +2306,8 @@ export class GameEngine {
       if (plot.crop) plot.growth = Math.min(CROPS[plot.crop].time, plot.growth + result.effects.cropGrowth);
     }
     if (result.camp.report.length) {
+      this.audio.cue('Camp shift complete', 'bell', anchor ? { x: anchor.x, y: anchor.y } : null);
+      this.audio.ding();
       if (announce) this.callbacks.onToast(result.camp.report[0]);
       this.saveGame(true);
       this.emitHud();
@@ -2286,9 +2637,12 @@ export class GameEngine {
     this.state.ghostTimer = 0;
     this.state.dead = false;
     this.state.deathReason = '';
-    this.badTripPhantoms = [];
-    this.mode = 'playing';
-    this.callbacks.onModeChange('playing');
+
+    this.clearPerception();
+    this.cancelFishing();
+    this.camX = p.x;
+    this.camY = p.y;
+    this.setMode('playing');
     this.audio.ding();
     this.burst(p.x, p.y - 16, '#ffd166', 20, 150);
 
@@ -2426,16 +2780,7 @@ export class GameEngine {
     this.audio.radioJingle(true);
     this.audio.questFanfare();
     this.burst(-70, -195, '#ffd166', 32, 210);
-    this.soundRipples.push({
-      x: -70,
-      y: -195,
-      radius: 18,
-      maxRadius: 210,
-      color: '#ff5d8f',
-      glyph: '♫',
-      life: 1.8,
-      maxLife: 1.8,
-    });
+    this.audio.cue('County broadcast', 'bell', { x: -70, y: -195 }, 'music');
     this.callbacks.onToast(
       firstTime
         ? 'ON AIR! Your All-Night County Broadcast echoed across all 15 regions! (+1 Broadcast Pin — keep exploring freely!)'
@@ -2537,6 +2882,16 @@ export class GameEngine {
       return;
     }
     const p = this.state.player;
+    const expeditionAction = expeditionActionAt(this.state.expeditions, p.x, p.y, this.state.day);
+    if (expeditionAction) {
+      this.useExpeditionAction(expeditionAction);
+      return;
+    }
+    if (millpondBankAt(p.x, p.y)) {
+      if (this.fishing.active) this.handleFishingActionDown();
+      else this.startCast();
+      return;
+    }
     const phase = getPhaseFromDayTime(this.state.dayTime);
     p.actionAnim = 0.24;
     p.squashX = 1.2;
@@ -2713,16 +3068,7 @@ export class GameEngine {
           this.state.worldFlags.undertoneForkTuned = true;
           this.audio.tuningForkChord();
           this.burst(f.x, f.y - 24, '#b388ff', 24, 180);
-          this.soundRipples.push({
-            x: f.x,
-            y: f.y - 20,
-            radius: 14,
-            maxRadius: 170,
-            color: '#b388ff',
-            glyph: '♪',
-            life: 1.6,
-            maxLife: 1.6,
-          });
+          this.audio.cue('Tuning fork', 'bell', { x: f.x, y: f.y - 20 }, 'music');
           if (first) {
             this.giveItem('tuned_reed', 2);
             const bonus = p.charId === 'bea' ? 2 : 1;
@@ -3029,8 +3375,7 @@ export class GameEngine {
         plot.crop = null;
         plot.growth = 0;
         this.state.stats.cropsHarvested += 1;
-        this.awardPractice('farming', `harvest_${harvestedCrop}`, 28);
-        this.gainXP(16);
+        this.awardPractice('farming', `harvest_${harvestedCrop}`, 28, 16);
         this.emitHud();
       } else {
         const bonusGrow = (this.hasSkill('green_thumb') ? 10 : 6) + (hasPerk(this.getDisciplines(), 'hydro_tender') ? 4 : 0);
@@ -3038,7 +3383,6 @@ export class GameEngine {
         this.audio.boop();
         this.burst(plot.x, plot.y - 10, '#ff85b3', 8, 90);
         this.addPopup(plot.x, plot.y - 34, '"Radiant sprout!"', '#ff85b3');
-        this.awardPractice('farming', `tend_${plot.crop}`, 8);
         this.tryHybridize(plot);
       }
       return;
@@ -3067,7 +3411,6 @@ export class GameEngine {
     plot.crop = seed.crop;
     plot.growth = 0;
     this.audio.boop();
-    this.awardPractice('farming', `plant_${seed.crop}`, 16);
     this.setActiveModal(null);
     this.callbacks.onToast(`Planted ${CROPS[seed.crop].name}! Boop to compliment sprouts.`);
   }
@@ -3075,7 +3418,8 @@ export class GameEngine {
   private tryHybridize(plot: Building): void {
     const hybrid = checkHybridPair(plot, this.state.buildings);
     if (!hybrid) return;
-    const chance = this.hasSkill('green_thumb') ? 0.68 : 0.36;
+    const chance = Math.min(1, (this.hasSkill('green_thumb') ? 0.68 : 0.36) *
+      (hasPerk(this.getDisciplines(), 'graft_sage') ? 1.6 : 1));
     if (Math.random() < chance) {
       plot.crop = hybrid;
       this.audio.trip();
@@ -3088,6 +3432,10 @@ export class GameEngine {
   public craftRecipe(recipeId: string): void {
     const r = RECIPES.find((x) => x.id === recipeId);
     if (!r) return;
+    if (r.requiresMillpond && this.state.expeditions.millpond.status !== 'restored') {
+      this.callbacks.onToast('Restore the Singing Millpond to unlock that recipe.');
+      return;
+    }
     const check = canCraftRecipe(
       r,
       this.state.inv,
@@ -3123,6 +3471,7 @@ export class GameEngine {
     const effCost = getEffectiveRecipeCost(r, this.state.disciplines);
     Object.entries(effCost).forEach(([k, v]) => this.takeItem(k, v));
     this.audio.ding();
+    this.audio.cue(r.type === 'place' ? 'Structure placed' : 'Recipe crafted', 'tool');
 
     if (r.type === 'place') {
       this.state.buildings.push({
@@ -3136,24 +3485,25 @@ export class GameEngine {
         rotation: 0,
       });
       this.state.stats.buildingsBuilt = (this.state.stats.buildingsBuilt || 0) + 1;
-      this.awardPractice('building', `build_${r.id}`, 28);
+      this.awardPractice('building', `build_${r.id}`, 28, 15);
       this.burst(p.x + p.facing * 52, p.y, '#ffd166', 14, 125);
       this.callbacks.onToast(`Placed ${r.name}! Press Space near it to manage, move, rotate, or salvage.`);
     } else if (r.type === 'gear' && r.gearKey) {
       p.gear[r.gearKey] = true;
-      this.awardPractice('fabrication', `gear_${r.id}`, 36);
+      this.awardPractice('fabrication', `gear_${r.id}`, 36, 15);
       this.callbacks.onToast(`Equipped ${r.name}!`);
     } else if (r.type === 'style' && r.style) {
       if (!this.state.unlockedStyles.includes(r.style)) this.state.unlockedStyles.push(r.style);
       p.moveStyle = r.style;
-      this.awardPractice('fabrication', `style_${r.id}`, 24);
+      this.awardPractice('fabrication', `style_${r.id}`, 24, 15);
       this.callbacks.onToast(`Unlocked & equipped ${r.name}!`);
     } else if (r.type === 'blend' && r.out) {
       Object.entries(r.out).forEach(([k, v]) => this.giveItem(k, v));
-      this.awardPractice('fabrication', `craft_${r.id}`, 24);
-      this.callbacks.onToast(`Crafted ${r.name}!`);
+      const campBonus = r.id === 'cool_mint_brew' && this.shelteredAtRefuge;
+      if (campBonus) this.giveItem('cooling_draught', 1);
+      this.awardPractice('fabrication', `craft_${r.id}`, 24, 15);
+      this.callbacks.onToast(campBonus ? 'Crafted 3 Cooling Draughts with the shelter bonus.' : `Crafted ${r.name}!`);
     }
-    this.gainXP(15);
     this.setActiveModal(null);
   }
 
@@ -3327,8 +3677,7 @@ export class GameEngine {
       this.state.player.moveStyle = trade.style;
     }
     this.audio.ding();
-    this.awardPractice('hospitality', `barter_${residentId}`, 18);
-    this.gainXP(14);
+    this.awardPractice('hospitality', `barter_${residentId}`, 18, 14);
     this.callbacks.onToast(`Bartered for ${trade.label}!`);
     this.emitHud();
   }
@@ -3379,6 +3728,7 @@ export class GameEngine {
     this.hitstop = 0.045;
     if (!this.state.reducedMotion) this.trauma = Math.min(1, this.trauma + 0.4);
     this.audio.hurt();
+    this.audio.cue('Vibe lost', 'warning');
     this.burst(p.x, p.y - 20, '#ff4d6d', 14, 165);
     this.addPopup(p.x, p.y - 46, `-${Math.round(scaled)} Vibe`, '#ff4d6d');
 
@@ -3389,6 +3739,13 @@ export class GameEngine {
 
   private triggerMeltCheck(reason: string): void {
     const p = this.state.player;
+    const { millpond, hollow } = this.state.expeditions;
+    const atMillpond = millpond.status === 'active' && within(p.x, p.y, MILLPOND, 355);
+    const atHollow = hollow.status === 'active' && within(p.x, p.y, HOLLOW, HOLLOW_ZONE_RADIUS);
+    if (atMillpond || atHollow) {
+      this.recoverFieldTrip(atHollow);
+      return;
+    }
     const refuge = findNearestWarmRefuge(p.x, p.y, this.state.buildings);
     const dur = getGhostTimerDuration(this.state.techniques, this.getDisciplines());
     if (refuge.dist < 5200) {
@@ -3404,6 +3761,55 @@ export class GameEngine {
       if (!this.state.reducedMotion) this.trauma = 0.7;
       this.burst(p.x, p.y - 16, '#ff5d8f', 28, 210);
     }
+    this.emitHud();
+  }
+
+  private recoverFieldTrip(isHollow: boolean): void {
+    const p = this.state.player;
+    const { hollow } = this.state.expeditions;
+    const refuge = isHollow ? HOLLOW_SHELTER : GROVE_CAMP;
+    const lostItem = isHollow ? 'chalk_quartz' : 'cool_mint';
+    const kept = isHollow ? 1 : 0;
+    const unbanked = Math.max(0, (this.state.inv[lostItem] ?? 0) - kept);
+    if (unbanked > 0 && !this.state.droppedSatchel && this.takeItem(lostItem, unbanked)) {
+      const anchor = isHollow
+        ? HOLLOW_RIBBONS.filter((_, index) => hasSite(hollow.ribbons, index)).at(-1)
+        : undefined;
+      const location = anchor ?? p;
+      this.state.droppedSatchel = {
+        x: location.x, y: location.y, day: this.state.day,
+        biomeName: isHollow ? HOLLOW.label : MILLPOND.label,
+        items: { [lostItem]: unbanked },
+      };
+      this.state.waypoint = { x: location.x, y: location.y, label: 'Lost Satchel' };
+    }
+    if (isHollow && !hollow.escorted) {
+      hollow.packed = false;
+      hollow.escortX = HOLLOW_PACK.x;
+      hollow.escortY = HOLLOW_PACK.y;
+      hollow.sharedDraught = false;
+      hollow.day = 0;
+    }
+    if (!isHollow) this.giveItem('ribbon_stake', Math.max(0, 2 - (this.state.inv.ribbon_stake ?? 0)));
+    this.state.dayTime = Math.min(DAY_LENGTH - 0.1, this.state.dayTime + 18);
+    p.x = refuge.x;
+    p.y = refuge.y;
+    p.vx = 0;
+    p.vy = 0;
+    p.vibe = Math.round(p.maxVibe * 0.72);
+    p.munch = Math.max(p.munch, 40);
+    p.wobble = 14;
+    this.state.ghostTimer = 0;
+    this.state.trips = {};
+    this.state.tripMaxDur = {};
+    this.camX = p.x;
+    this.camY = p.y;
+    this.clearPerception();
+    this.cancelFishing();
+    const advice = isHollow ? 'Follow the ribbons and bank quartz at the trailhead.' : 'Try the shaded willow bank and save a Cool-Mint sprig for the walk.';
+    this.addJournalNote(advice);
+    this.callbacks.onToast(`Back safely at ${refuge.label}. ${advice}`);
+    this.saveGame(true);
     this.emitHud();
   }
 
@@ -3437,6 +3843,7 @@ export class GameEngine {
     }
 
     if (this.mode !== 'playing' || this.activeModal) return;
+    this.visualCues.step(dt);
 
     if (this.state.dead) {
       if (this.defeatDelay > 0) {
@@ -3525,13 +3932,14 @@ export class GameEngine {
     );
 
     // Regional musical & ambient engine + Bad Trip heartbeat & substance timbres
-    this.audio.tickRegionalAudio(dt, biome.id, p.wobble, isChrono, isHyper, phase.id === 'night', {
+    const intensity = this.state.audioSettings.perceptionIntensity;
+    this.audio.tickRegionalAudio(dt, biome.id, p.wobble * intensity, isChrono && intensity > 0, isHyper && intensity > 0, phase.id === 'night', {
       radioRepaired: this.state.worldFlags.radioRepaired,
       compressorSilent: physics.compressorSilent,
       dryerKnockWarning: physics.dryerKnockWarning,
       barnabyLowVibe: p.charId === 'barnaby' && p.vibe < p.maxVibe * 0.3,
-      badTripIntensity: tripProfile.badTripIntensity,
-      dominantTrip: tripProfile.dominantTrip,
+      badTripIntensity: tripProfile.badTripIntensity * intensity,
+      dominantTrip: intensity > 0 ? tripProfile.dominantTrip : null,
     });
 
     if (tripProfile.mood === 'bad_trip' && !this.lastBadTripNotice) {
@@ -3611,10 +4019,16 @@ export class GameEngine {
     if (p.invulnTimer > 0) p.invulnTimer = Math.max(0, p.invulnTimer - dt);
     if (this.foldSpanTimer > 0) this.foldSpanTimer = Math.max(0, this.foldSpanTimer - dt);
     if (this.guideLineTimer > 0) this.guideLineTimer = Math.max(0, this.guideLineTimer - dt);
+    this.steamHeatTimer = Math.max(0, this.steamHeatTimer - dt);
+    if (this.lanternGlow) {
+      this.lanternGlow.time -= dt;
+      if (this.lanternGlow.time <= 0) this.lanternGlow = null;
+    }
 
     // Step active fishing FSM
     if (this.fishing.active) {
-      if (!this.isNearDock()) {
+      const onCorrectBank = this.fishing.targetFish === 'reed_perch' ? Boolean(millpondBankAt(p.x, p.y)) : this.isNearDock();
+      if (!onCorrectBank) {
         this.cancelFishing();
       } else {
         const refl = computeDockReflectionState(this.state.time, this.state.worldFlags.dockLampSlot, this.state.worldFlags.ferryRestored);
@@ -3625,23 +4039,29 @@ export class GameEngine {
         });
         this.fishing = res.next;
         if (res.events.nibbleTwitch) {
+          this.audio.cue('Fish nibble', 'fish', { x: this.fishing.bobberX, y: this.fishing.bobberY });
           this.spawnWaterRipple(this.fishing.bobberX, this.fishing.bobberY, '#c8f4ff', 36);
         }
         if (res.events.biteDive) {
           this.audio.corkSqueak();
-          this.spawnWaterRipple(this.fishing.bobberX, this.fishing.bobberY, '#ffd166', 54);
+          this.audio.cue('Fish bite', 'fish', { x: this.fishing.bobberX, y: this.fishing.bobberY }, 'effects', 'urgent');
         }
         if (res.events.landedFish) {
           const fishId = res.events.landedFish;
           const fishDef = FISH_DEFS[fishId];
-          this.giveItem(fishId, 1);
+          this.giveItem(fishId, fishId === 'mirror_minnow' && this.fishing.steadyReflection ? 2 : 1);
           this.state.stats.fishCaught = (this.state.stats.fishCaught || 0) + 1;
-          if (this.state.worldFlags.ferrySupperStage === 'unstarted' || this.state.worldFlags.ferrySupperStage === 'accepted') {
+          if (fishId === 'reed_perch') {
+            const trip = this.state.expeditions.millpond;
+            trip.perchLanded = true;
+            if (trip.status === 'active' && millpondReady(trip)) this.state.waypoint = GROVE_CAMP;
+            this.callbacks.onToast('Reed Perch landed. Check the Millpond field notes in the Camp Ledger.');
+          } else if (this.state.worldFlags.ferrySupperStage === 'unstarted' || this.state.worldFlags.ferrySupperStage === 'accepted') {
             this.state.worldFlags.ferrySupperStage = 'caught';
           }
-          this.awardPractice('angling', `catch_${fishId}`, fishId === 'mirror_minnow' ? 45 : 30);
-          this.gainXP(fishId === 'mirror_minnow' ? 32 : 18);
+          this.awardPractice('angling', `catch_${fishId}`, fishId === 'mirror_minnow' ? 45 : 30, fishId === 'mirror_minnow' ? 32 : 18);
           this.audio.questFanfare();
+          this.audio.cue('Fish landed', 'fish', { x: this.fishing.bobberX, y: this.fishing.bobberY });
           this.burst(this.fishing.bobberX, this.fishing.bobberY, fishDef.accent, 22, 160);
           this.addPopup(p.x, p.y - 46, `Landed ${fishDef.name}!`, fishDef.accent);
           if (fishId === 'mirror_minnow' && !this.state.worldFlags.mirrorMinnowCaught) {
@@ -3659,14 +4079,16 @@ export class GameEngine {
             }
             this.addJournalNote('Caught a Mirror Minnow at Delta Public Bank! Unlocked the Prism Reel craft lead.');
             this.callbacks.onToast('Landed rare Mirror Minnow! Prism Reel crafting lead added to your Field Journal!');
-          } else {
+          } else if (fishId !== 'reed_perch') {
             this.callbacks.onToast(
               `Landed ${fishDef.name}! Return to your Giggle-Grove Camp Table to cook Ferryman’s Perch Chowder.`,
             );
           }
+          if (fishId === 'reed_perch') this.saveGame(true);
           this.emitHud();
         } else if (res.events.escaped) {
           this.audio.waterPlop();
+          this.audio.cue('Fish escaped', 'fish', { x: this.fishing.bobberX, y: this.fishing.bobberY });
           this.addPopup(this.fishing.bobberX, this.fishing.bobberY - 20, 'Slipped off!', '#ff85b3');
           this.emitHud();
         }
@@ -3702,16 +4124,7 @@ export class GameEngine {
           if (this.ferryCallTimer <= 0) {
             this.ferryCallTimer = 14;
             this.audio.ferryTwoNoteCall();
-            this.soundRipples.push({
-              x: table.x + 48,
-              y: table.y - 12,
-              radius: 12,
-              maxRadius: 125,
-              color: '#72efdd',
-              glyph: '♫',
-              life: 1.5,
-              maxLife: 1.5,
-            });
+            this.audio.cue('Ferry departure', 'bell', { x: table.x + 48, y: table.y - 12 }, 'music');
           }
         }
       }
@@ -3735,23 +4148,13 @@ export class GameEngine {
       tripProfile.playerSpeedMult *
       (this.foldSpanTimer > 0 ? Math.max(1, physics.speedMult) : physics.speedMult);
 
-    // Gentle dizzy sway during intense Bad Trip (disabled in Reduced Motion)
-    const dizzyX =
-      !this.state.reducedMotion && tripProfile.badTripIntensity > 0.5
-        ? Math.sin(this.state.time * 2.3) * 28 * tripProfile.badTripIntensity
-        : 0;
-    const dizzyY =
-      !this.state.reducedMotion && tripProfile.badTripIntensity > 0.5
-        ? Math.cos(this.state.time * 1.9) * 22 * tripProfile.badTripIntensity
-        : 0;
-
     const rolling = p.rollTimer > 0;
     if (rolling) {
       p.rollTimer -= dt;
     } else {
       const drag = effectiveStyle === 'toast_skates' ? 0.9 : 0.72;
-      p.vx = p.vx * drag + (mx * speed + physics.pushX + dizzyX) * (1 - drag);
-      p.vy = p.vy * drag + (my * speed + physics.pushY + dizzyY) * (1 - drag);
+      p.vx = p.vx * drag + (mx * speed + physics.pushX) * (1 - drag);
+      p.vy = p.vy * drag + (my * speed + physics.pushY) * (1 - drag);
     }
 
     const prevX = p.x;
@@ -3770,21 +4173,7 @@ export class GameEngine {
       if (this.stepSoundAccum > 88) {
         this.stepSoundAccum = 0;
         this.audio.leadStep(p.charId, p.vibe < p.maxVibe * 0.3);
-        if (trips.has('synesthesia')) {
-          const glyphs = ['♪', '♫', '◈', '✦'];
-          const cols = ['#ffd166', '#2ec4b6', '#ff5d8f', '#8be9fd'];
-          const idx = Math.floor(Math.random() * glyphs.length);
-          this.soundRipples.push({
-            x: p.x,
-            y: p.y + 4,
-            radius: 10,
-            maxRadius: 96,
-            color: cols[idx],
-            glyph: glyphs[idx],
-            life: 0.95,
-            maxLife: 0.95,
-          });
-        }
+        if (trips.has('synesthesia')) this.audio.cue('Resonant step', 'bell');
       }
       if (isHyper && Math.random() < dt * 7) {
         this.spawnParticle(p.x, p.y - 6, rand(-25, 25), rand(-55, -20), '#ffd166', 5, 0.55, 'note');
@@ -3795,70 +4184,7 @@ export class GameEngine {
       }
     }
 
-    // Update Perceptual Tracer Afterimages (Chrono, Floaty, Prism, Velvet, Disco, or Bad Trip)
-    const shouldLeaveTracers =
-      tripProfile.badTripIntensity > 0.45 ||
-      Array.from(trips).some((tid) => TRIP_VISUAL_META[tid].hasTracers);
-    this.tracerTimer -= dt;
-    if (shouldLeaveTracers && distMoved > 1.2 && this.tracerTimer <= 0) {
-      this.tracerTimer = 0.065;
-      this.playerTracers.push({
-        x: p.x,
-        y: p.y,
-        facing: p.facing,
-        bob: Math.abs(Math.sin(p.bob)) * st.bounce,
-        elevation: p.elevation,
-        color:
-          tripProfile.badTripIntensity > 0.45
-            ? '#9ef01a'
-            : getTripDominantColor(tripProfile.dominantTrip),
-        alpha: 0.92,
-        charId: p.charId,
-      });
-      if (this.playerTracers.length > 9) this.playerTracers.shift();
-    }
-    for (let i = this.playerTracers.length - 1; i >= 0; i--) {
-      this.playerTracers[i].alpha -= dt * 1.65;
-      if (this.playerTracers[i].alpha <= 0) this.playerTracers.splice(i, 1);
-    }
-
-    // Update Synesthesia Sound-Wave Ripples
-    for (let i = this.soundRipples.length - 1; i >= 0; i--) {
-      const r = this.soundRipples[i];
-      r.life -= dt;
-      r.radius = r.maxRadius * (1 - Math.max(0, r.life / r.maxLife));
-      if (r.life <= 0) this.soundRipples.splice(i, 1);
-    }
-
-    // Update Bad Trip Peripheral Shadow Phantoms (vanish gently if approached or grounded)
-    if (tripProfile.badTripIntensity > 0.35) {
-      this.phantomSpawnTimer -= dt;
-      if (this.phantomSpawnTimer <= 0 && this.badTripPhantoms.length < 3) {
-        this.phantomSpawnTimer = rand(2.2, 4.2);
-        const ang = Math.random() * Math.PI * 2;
-        const dist = rand(210, 320);
-        this.badTripPhantoms.push({
-          x: p.x + Math.cos(ang) * dist,
-          y: p.y + Math.sin(ang) * dist * 0.72,
-          life: rand(3.5, 5.5),
-          maxLife: 5.5,
-          whisper: BAD_TRIP_WHISPERS[Math.floor(Math.random() * BAD_TRIP_WHISPERS.length)],
-          seed: Math.random() * 50,
-        });
-      }
-      for (let i = this.badTripPhantoms.length - 1; i >= 0; i--) {
-        const ph = this.badTripPhantoms[i];
-        ph.life -= dt;
-        if (Math.hypot(ph.x - p.x, ph.y - p.y) < 125 || ph.life <= 0) {
-          if (Math.hypot(ph.x - p.x, ph.y - p.y) < 125) {
-            this.burst(ph.x, ph.y - 36, '#9ef01a', 8, 95);
-          }
-          this.badTripPhantoms.splice(i, 1);
-        }
-      }
-    } else if (this.badTripPhantoms.length > 0) {
-      this.badTripPhantoms = [];
-    }
+    if (distMoved > 1.2) this.perception.rememberStride(prevX, prevY - p.elevation * 42, p.facing);
 
     this.camX += (p.x - this.camX) * Math.min(1, dt * 8.5);
     this.camY += (p.y - this.camY) * Math.min(1, dt * 8.5);
@@ -3897,7 +4223,7 @@ export class GameEngine {
 
     // Warm refuge check (placed Lava Lamps, Dock Lamps, settlement warm refuges, Appliance Bulbs, Lantern Moth)
     const lampR = this.hasSkill('mega_lamp') ? 245 : 175;
-    let nearWarmth =
+    let nearWarmth = Boolean(this.lanternGlow && within(p.x, p.y, this.lanternGlow, 140)) ||
       LANDMARKS.some((lm) => lm.isWarmRefuge && Math.hypot(lm.x - p.x, lm.y - p.y) < 230) ||
       WORLD_FEATURES.some((f) => f.kind === 'appliance_bulb' && Math.hypot(f.x - p.x, f.y - p.y) < f.radius) ||
       this.state.creatures.some((c) => c.tamed && c.type === 'lantern_moth' && Math.hypot(c.x - p.x, c.y - p.y) < 150);
@@ -3912,7 +4238,8 @@ export class GameEngine {
         nearWarmth = true;
       }
       if (b.type === 'camp_table' && d < 170) {
-        const cozyRate = this.state.worldFlags.ferrySupperFollowUp === 'comfort_stop' ? 2.4 : 1.1;
+        const hostBonus = phase.id === 'dusk' && b.hasSecondSetting && hasPerk(this.getDisciplines(), 'host') ? 4 : 0;
+        const cozyRate = (this.state.worldFlags.ferrySupperFollowUp === 'comfort_stop' ? 2.4 : 1.1) + hostBonus;
         p.vibe = Math.min(p.maxVibe, p.vibe + dt * cozyRate);
       }
       if (b.type === 'rain_trough' && d < 240 && Math.random() < dt * 0.55) {
@@ -3963,7 +4290,12 @@ export class GameEngine {
         );
         const baitGardenMult = this.state.worldFlags.ferrySupperFollowUp === 'bait_garden' && b.crop === 'bell_reed_crop' ? 1.45 : 1;
         const shelterMult = evaluateCampShelter(b.x, b.y, this.state.buildings).sheltered ? 1.1 : 1;
-        b.growth = Math.min(CROPS[b.crop].time, b.growth + growthDelta * baitGardenMult * shelterMult);
+        const hydro = hasPerk(this.getDisciplines(), 'hydro_tender') && this.state.buildings.some(
+          (device) => (device.type === 'rain_trough' || device.type === 'choir_irrigator') && within(b.x, b.y, device, 220));
+        const bellReed = b.crop === 'bell_reed_crop' && hasPerk(this.getDisciplines(), 'graft_sage');
+        const lantern = this.lanternGlow && within(b.x, b.y, this.lanternGlow, 140);
+        b.growth = Math.min(CROPS[b.crop].time,
+          b.growth + growthDelta * baitGardenMult * shelterMult * (hydro ? 2 : 1) * (bellReed ? 1.35 : 1) * (lantern ? 1.5 : 1));
         if (phase.id === 'dusk' && Math.random() < dt * 0.08) this.tryHybridize(b);
       }
     }
@@ -3974,12 +4306,53 @@ export class GameEngine {
       p.vibe = Math.min(p.maxVibe, p.vibe + dt * 3.2);
     }
 
+    const pondBank = millpondBankAt(p.x, p.y);
+    const inHollowShelter = within(p.x, p.y, HOLLOW_SHELTER, HOLLOW_SAFE_RADIUS);
+    const sheltered = nearWarmth || pondBank?.shaded || inHollowShelter || evaluateCampShelter(p.x, p.y, this.state.buildings).sheltered;
+    if (pondBank && this.state.ghostTimer <= 0) {
+      if (pondBank.shaded) p.vibe = Math.min(p.maxVibe, p.vibe + dt * 2.1);
+      else if (phase.id === 'day' && this.state.expeditions.millpond.status === 'active') p.vibe -= dt * 0.65;
+    }
+    const hollowSquall = this.tickHollow(dt);
+    const newLandmark = LANDMARKS.find((landmark) => within(p.x, p.y, landmark, 170)) ?? null;
+    if (newLandmark?.id !== this.resonantLandmark?.id && newLandmark) {
+      this.audio.cue(newLandmark.name, 'bell', newLandmark, 'music');
+      this.audio.landmarkChime(newLandmark.id);
+    }
+    this.resonantLandmark = newLandmark;
+    this.shelteredAtRefuge = sheltered;
+    const countyWeather = getCountyWeather(this.state.worldSeed, this.state.day);
+    const activeWeather = isWeatherActive(countyWeather, phase.id) ? countyWeather : null;
+    if (activeWeather !== this.lastWeatherCue) {
+      if (activeWeather) this.audio.cue(WEATHER[activeWeather].name, 'wind', null, 'ambience');
+      this.lastWeatherCue = activeWeather;
+    }
+    const pressure = getMeltPressure(p.vibe, p.maxVibe, this.state.ghostTimer > 0);
+    const critical = pressure >= PERCEPTION.warningThreshold;
+    if (critical && !this.criticalMelt) {
+      this.audio.telegraph();
+      this.audio.cue('High melt pressure', 'warning', null, 'effects', 'urgent');
+    }
+    this.criticalMelt = critical;
+    const drifting = !sheltered && (hollowSquall || activeWeather === 'paper_squall' || pressure >= 0.55);
+    const supported = this.state.creatures.some((creature) => creature.tamed && within(p.x, p.y, creature, 120));
+    const panic = pressure >= (supported ? PERCEPTION.warningThreshold + 0.05 : PERCEPTION.warningThreshold);
+    this.perception.step(dt, {
+      calm: sheltered || tripProfile.mood === 'euphoric' || Boolean(pondBank && pressure < 0.35) || (supported && pressure < 0.4),
+      focused: this.isNearDock() || Boolean(pondBank) || Boolean(newLandmark) || this.visualCues.active ||
+        Boolean(tripProfile.dominantTrip) || (supported && pressure >= 0.4),
+      strain: Math.max(pressure, p.wobble / 100, tripProfile.badTripIntensity),
+      danger: panic || tripProfile.badTripTier === 3 || (hollowSquall || activeWeather === 'paper_squall') && !sheltered,
+      drifting,
+    });
+    this.audio.setPerceptionMix(this.perception.weights, this.perception.cadenceOffset, hollowSquall, Boolean(newLandmark));
+
     if (biome.cold > 0 && !p.gear.sweater && !nearWarmth && this.state.ghostTimer <= 0) {
       p.vibe -= dt * biome.cold * physics.coldMult * diffDrain;
     }
 
     if (this.state.ghostTimer > 0) {
-      if (nearWarmth) {
+      if (nearWarmth || inHollowShelter) {
         this.state.ghostTimer = 0;
         p.vibe = p.maxVibe * 0.62;
         p.munch = Math.max(35, p.munch);
@@ -3996,14 +4369,13 @@ export class GameEngine {
         }
       }
     } else {
-      const shelterNow = evaluateCampShelter(p.x, p.y, this.state.buildings);
       const camp = this.state.camp.wardDay === this.state.day ? this.getCampAnchor() : undefined;
       const watched = Boolean(camp && Math.hypot(camp.x - p.x, camp.y - p.y) <= 480);
-      const weather = getWeatherPressure(getCountyWeather(this.state.worldSeed, this.state.day), phase.id, nearWarmth || shelterNow.sheltered || watched);
+      const weather = getWeatherPressure(countyWeather, phase.id, sheltered || watched);
       p.munch = Math.max(0, p.munch + weather.munch * diffDrain * dt);
       p.wobble = Math.max(0, p.wobble + weather.wobble * dt);
       const nightDelta = computeNightVibeDelta(dt, phase.id, nearWarmth, p.charId, {
-        sheltered: shelterNow.sheltered,
+        sheltered,
         lanternStrider: hasPerk(this.getDisciplines(), 'lantern_strider'),
       });
       p.vibe = Math.min(p.maxVibe, p.vibe + nightDelta + weather.vibe * diffDrain * dt);
@@ -4072,12 +4444,24 @@ export class GameEngine {
       pr.y += pr.vy * dt;
       pr.life -= dt;
       if (pr.fromPlayer) {
+        if (pr.pierced && !pr.rangBell) {
+          const bell = WORLD_FEATURES.find((feature) =>
+            (feature.kind === 'tuning_fork' || feature.kind === 'dock_lamp_spot') && within(pr.x, pr.y, feature, 35));
+          if (bell) {
+            pr.rangBell = true;
+            this.audio.glassChime();
+            this.audio.cue('Parcel rang a bell', 'bell', bell);
+          }
+        }
         for (const c of this.state.creatures) {
-          if (c.aiState !== 'ko' && Math.hypot(c.x - pr.x, c.y - pr.y) < 38) {
+          if (c.aiState !== 'ko' && !pr.pierced?.includes(c.id) && Math.hypot(c.x - pr.x, c.y - pr.y) < 38) {
             c.frozenTimer = 1.6;
             this.damageCreature(c, pr.damage);
-            pr.life = 0;
-            break;
+            if (pr.pierced) pr.pierced.push(c.id);
+            else {
+              pr.life = 0;
+              break;
+            }
           }
         }
       } else {
@@ -4117,6 +4501,10 @@ export class GameEngine {
           activeTokens -= 1;
         }
         continue;
+      }
+      const movingFast = Math.hypot(c.vx, c.vy) > 85 || c.aiState === 'attack';
+      if ((movingFast || c.tamed) && within(p.x, p.y, c, 400)) {
+        this.perception.rememberStride(c.x, c.y, c.facing, c.id);
       }
 
       if (c.sayTimer > 0) c.sayTimer -= dt;
@@ -4220,6 +4608,7 @@ export class GameEngine {
               c.say = def.lines[Math.floor(Math.random() * def.lines.length)];
               c.sayTimer = 1.2;
               this.audio.telegraph();
+              this.audio.cue('Incoming attack', 'warning', { x: c.x, y: c.y }, 'effects', 'urgent');
             }
           }
         } else if (c.aiState === 'windup') {
@@ -4357,6 +4746,12 @@ export class GameEngine {
     if (this.fishing.active) {
       return null;
     }
+    const expeditionAction = expeditionActionAt(this.state.expeditions, p.x, p.y, this.state.day);
+    if (expeditionAction) {
+      return { ...expeditionAction.point, label: actionLabel(expeditionAction), accent: '#72efdd' };
+    }
+    const pond = millpondBankAt(p.x, p.y);
+    if (pond) return { x: pond.x, y: pond.y, label: '[Space] Cast at the Millpond', accent: '#72efdd' };
 
     for (const res of RESIDENTS) {
       const pos = this.getEffectiveResidentPos(res, phase.id, this.state.time);
@@ -4430,67 +4825,38 @@ export class GameEngine {
   }
 
   private render(): void {
-    const ctx = this.ctx;
+    const ctx = this.worldCtx;
     const p = this.state.player;
     const t = this.state.time;
-    const wf = p.wobble / 100;
-    const trips = this.activeTripsSet();
-    const isG = this.state.exp?.id === 'gravity_nap';
+    const settings = this.state.audioSettings;
+    const intensity = settings.perceptionIntensity;
+    const still = this.state.reducedMotion || settings.flashFree;
     const rm = this.state.reducedMotion;
+    const trips = this.activeTripsSet();
+    const tripProfile = computeTripProfile(p.vibe, p.maxVibe, p.wobble, this.state.trips, this.state.tripMaxDur, this.isNearCalmingTotem());
+    const isG = this.state.exp?.id === 'gravity_nap';
     const phase = getPhaseFromDayTime(this.state.dayTime);
     const biome = getBiomeAt(p.x, p.y);
     const physics = getRegionPhysics(p.x, p.y, t, biome.id, this.state.techniques, p.elevation, p.wobble, false);
-    const nearTotemRender = this.isNearCalmingTotem();
-    const tripProfile = computeTripProfile(
-      p.vibe,
-      p.maxVibe,
-      p.wobble,
-      this.state.trips,
-      this.state.tripMaxDur,
-      nearTotemRender,
-    );
-
-    const noCamMotion = rm || Boolean(this.state.audioSettings.stableCamera);
-    const shakeMag = noCamMotion ? 0 : this.trauma * this.trauma * 14 + tripProfile.badTripIntensity * 2.4;
-    const shakeX = shakeMag > 0.2 ? (Math.random() * 2 - 1) * shakeMag : 0;
-    const shakeY = shakeMag > 0.2 ? (Math.random() * 2 - 1) * shakeMag : 0;
-    const wobbleSwayX = !noCamMotion && this.mode === 'playing' && wf > 0.45 ? Math.sin(t * 2.4) * (4 + wf * 6) : 0;
-    const wobbleSwayY = !noCamMotion && this.mode === 'playing' && wf > 0.45 ? Math.cos(t * 2.0) * (3 + wf * 4.5) : 0;
-
-    // Breathing perceptual FOV zoom & subtle Dutch tilt during deep trips / Bad Trip
-    const zoomPulse =
-      noCamMotion || this.mode === 'title' || tripProfile.cameraZoomAmp <= 0
-        ? 1
-        : 1 + Math.sin(t * (tripProfile.mood === 'bad_trip' ? 2.7 : 1.3)) * tripProfile.cameraZoomAmp;
-    const dutchTilt =
-      noCamMotion || this.mode === 'title'
-        ? 0
-        : tripProfile.badTripIntensity > 0.35
-          ? Math.sin(t * 1.45) * 0.028 * tripProfile.badTripIntensity
-          : trips.has('kaleido') || trips.has('velvet_fog')
-            ? Math.sin(t * 0.85) * 0.012
-            : 0;
-
-    const cx = this.camX - this.width / 2 + shakeX + wobbleSwayX;
-    const cy = this.camY - this.height / 2 + shakeY + wobbleSwayY;
+    const shake = still || settings.stableCamera ? 0 : this.trauma ** 2 * 4 * intensity;
+    const cx = Math.round(this.camX - this.width / 2);
+    const cy = Math.round(this.camY - this.height / 2);
 
     ctx.save();
-    if (zoomPulse !== 1 || dutchTilt !== 0) {
-      ctx.translate(this.width / 2, this.height / 2);
-      if (dutchTilt !== 0) ctx.rotate(dutchTilt);
-      if (zoomPulse !== 1) ctx.scale(zoomPulse, zoomPulse);
-      ctx.translate(-this.width / 2, -this.height / 2);
-    }
-    ctx.translate(-cx, -cy);
+    ctx.translate(-cx + Math.sin(t * 20) * shake, -cy + Math.cos(t * 20) * shake);
 
-    drawTerrain(ctx, cx, cy, this.width, this.height, t, wf, trips, this.state.worldFlags, rm);
-    if (this.trailRun) {
-      const { id, gateIndex } = this.trailRun;
-      const gate = RIBBON_TRAILS[id].gates[gateIndex];
-      if (Math.abs(gate.x - this.camX) <= this.width / 2 + 100 && Math.abs(gate.y - this.camY) <= this.height / 2 + 100) {
-        drawRibbonGate(ctx, gate, gateIndex);
-      }
+    drawTerrain(ctx, cx, cy, this.width, this.height, t, this.state.worldFlags, rm, this.perception.weights.calm, this.perception.parallax);
+    if (!this.paperPattern && imageReady(this.fieldAssets.paper)) this.paperPattern = ctx.createPattern(this.fieldAssets.paper, 'repeat');
+    if (this.paperPattern) {
+      ctx.save();
+      ctx.fillStyle = this.paperPattern;
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.globalAlpha = 0.25;
+      ctx.fillRect(cx - 8, cy - 8, this.width + 16, this.height + 16);
+      ctx.restore();
     }
+    drawExpeditionScenery(ctx, this.fieldAssets, this.state.expeditions, this.camX, this.camY,
+      Math.hypot(this.width, this.height) * 0.65, this.perception.sceneryPhase, rm ? 0 : this.perception.weights.calm, this.perception.parallax, this.state.day);
 
     const viewPadX = this.width * 0.68;
     const viewPadY = this.height * 0.68;
@@ -4498,39 +4864,23 @@ export class GameEngine {
     // Ground-layer world features (tracks, canals, stamp bridges, candleboats, ramps)
     for (const f of WORLD_FEATURES) {
       if (Math.abs(f.x - this.camX) < viewPadX + f.radius && Math.abs(f.y - this.camY) < viewPadY + f.radius) {
-        drawWorldFeature(ctx, f, t, this.state.worldFlags, this.state.mirrorAngles, physics, rm);
+        drawWorldFeature(ctx, f, t, this.state.worldFlags, this.state.mirrorAngles, physics, still || intensity === 0);
       }
     }
 
-    // Perceptual world-space psychedelic layer (Sacred Geometry, Starlight Constellations, Disco tiles, Spectrum rings, Tracers, Bad Trip Phantoms)
     if (this.mode !== 'title') {
-      const nearbyObjects: Array<{ x: number; y: number }> = [];
-      if (trips.has('cosmic')) {
-        for (const o of this.state.objects) {
-          if (o.respawn > 0) continue;
-          if (Math.hypot(o.x - p.x, o.y - p.y) < 380) {
-            nearbyObjects.push({ x: o.x, y: o.y });
-            if (nearbyObjects.length >= 14) break;
-          }
-        }
+      const lane = millpondBankAt(p.x, p.y) ?? DOCK_LAMP_SLOTS[this.selectedCastSlot];
+      if (Math.abs(lane.x - this.camX) < viewPadX && Math.abs(lane.y - this.camY) < viewPadY) {
+        this.perception.drawHatch(ctx,
+          this.fishing.active ? this.fishing.bobberX : lane.waterX,
+          this.fishing.active ? this.fishing.bobberY : lane.waterY,
+          this.fishing.targetFish === 'mirror_minnow' ? this.fieldAssets.spiral : this.fieldAssets.honeycomb);
       }
-      drawTripWorldLayer(
-        ctx,
-        p,
-        t,
-        trips,
-        tripProfile,
-        this.playerTracers,
-        this.soundRipples,
-        this.badTripPhantoms,
-        nearbyObjects,
-        rm,
-        this.state.audioSettings.effectStrength ?? 1,
-        Boolean(this.state.audioSettings.flashFree),
-      );
+      if (this.resonantLandmark) this.perception.drawLandmarkHalo(ctx, this.resonantLandmark.x, this.resonantLandmark.y);
+      this.perception.drawEchoes(ctx);
+      this.visualCues.drawRipples(ctx, this.perception.weights.focus, rm);
     }
-
-    drawWaterRipples(ctx, this.waterRipples);
+    if (intensity > 0) drawWaterRipples(ctx, this.waterRipples, intensity, rm, settings.flashFree);
 
     const drawables: Array<{ y: number; fn: () => void }> = [];
     const seeCrystals = canSeeCrystals(p, trips, this.state.exp?.id ?? null) || this.guideLineTimer > 0;
@@ -4550,7 +4900,7 @@ export class GameEngine {
     for (const o of this.state.objects) {
       if (o.respawn > 0 || (o.type === 'crystal' && !seeCrystals)) continue;
       if (Math.abs(o.x - this.camX) < viewPadX && Math.abs(o.y - this.camY) < viewPadY) {
-        drawables.push({ y: o.y, fn: () => drawWorldObject(ctx, o, t, wf, trips, rm) });
+        drawables.push({ y: o.y, fn: () => drawWorldObject(ctx, o, t, rm, settings.flashFree, this.perception.contour(o.seed)) });
       }
     }
     for (const building of this.state.buildings) {
@@ -4572,7 +4922,7 @@ export class GameEngine {
     }
     for (const c of this.state.creatures) {
       if (Math.abs(c.x - this.camX) < viewPadX + 60 && Math.abs(c.y - this.camY) < viewPadY + 60) {
-        drawables.push({ y: c.y, fn: () => drawCreature(ctx, c, t, isG, rm) });
+        drawables.push({ y: c.y, fn: () => drawCreature(ctx, c, t, isG, rm, settings.flashFree) });
       }
     }
     if (this.state.droppedSatchel) {
@@ -4582,27 +4932,12 @@ export class GameEngine {
       }
     }
     if (this.mode !== 'title') {
-      drawables.push({ y: p.y + p.elevation * 40, fn: () => drawPlayer(ctx, p, t, trips, isG, this.state.ghostTimer, rm) });
+      drawables.push({ y: p.y + p.elevation * 40, fn: () => drawPlayer(ctx, p, t, trips, isG, this.state.ghostTimer, rm, settings.flashFree) });
     }
 
     drawables.sort((a, b) => a.y - b.y);
+    this.perception.drawGlaze(ctx, p.x, p.y, 170);
     for (const d of drawables) d.fn();
-
-    if (this.mode === 'playing' && this.fishing.active) {
-      drawFishingSession(ctx, p, this.fishing, t, rm);
-    }
-
-    // Directional compass arrow around player (Ghost Mode refuge OR active Atlas waypoint)
-    if (this.mode === 'playing') {
-      const waypoint = this.getDisplayedWaypoint();
-      if (this.state.ghostTimer > 0) {
-        const ref = findNearestWarmRefuge(p.x, p.y, this.state.buildings);
-        drawWorldCompass(ctx, p.x, p.y, ref.angle, '#ff9f1c');
-      } else if (waypoint) {
-        const ang = Math.atan2(waypoint.y - p.y, waypoint.x - p.x);
-        drawWorldCompass(ctx, p.x, p.y, ang, '#ffd166');
-      }
-    }
 
     for (const dk of this.state.ducks) {
       ctx.save();
@@ -4630,31 +4965,18 @@ export class GameEngine {
     }
     ctx.globalAlpha = 1;
 
-    if (this.mode === 'playing' && !this.activeModal && this.nearestPrompt) {
-      drawInteractPrompt(ctx, this.nearestPrompt, t);
-    }
-
-    ctx.font = '800 13px "Plus Jakarta Sans", sans-serif';
-    ctx.textAlign = 'center';
-    for (const pop of this.state.popups) {
-      ctx.globalAlpha = Math.min(1, pop.life / 0.4);
-      ctx.strokeStyle = '#160c24';
-      ctx.lineWidth = 4;
-      ctx.strokeText(pop.text, pop.x, pop.y);
-      ctx.fillStyle = pop.color;
-      ctx.fillText(pop.text, pop.x, pop.y);
-    }
-    ctx.globalAlpha = 1;
-
     ctx.restore();
 
     const weather = getCountyWeather(this.state.worldSeed, this.state.day);
-    if (this.mode !== 'title' && isWeatherActive(weather, phase.id)) {
-      drawWeatherVeil(ctx, this.width, this.height, weather, t, rm || Boolean(this.state.audioSettings.flashFree));
+    const { hollow } = this.state.expeditions;
+    const inHollowSquall = hollow.status === 'active' && hollow.day === this.state.day && hollow.elapsed >= 12 && hollow.elapsed < 180 &&
+      within(p.x, p.y, HOLLOW, HOLLOW_ZONE_RADIUS);
+    if (this.mode !== 'title' && (inHollowSquall || isWeatherActive(weather, phase.id))) {
+      drawWeatherVeil(ctx, this.width, this.height, inHollowSquall ? 'paper_squall' : weather, this.perception.ambientTime, still || intensity === 0);
     }
 
     // Screen-space ambient pollen
-    if (!rm) {
+    if (!still && intensity > 0) {
       ctx.fillStyle = 'rgba(255, 240, 200, 0.32)';
       for (const m of this.ambientMotes) {
         const sx = (((m.x + this.width / 2 - this.camX * 0.25) % this.width) + this.width) % this.width;
@@ -4667,37 +4989,49 @@ export class GameEngine {
 
     // Day/Dusk/Night atmosphere & lantern darkness
     if (phase.id === 'dusk' || this.state.exp?.id === 'rave_cloud') {
-      ctx.fillStyle = `hsla(${(t * 36) % 360}, 78%, 52%, 0.11)`;
+      ctx.fillStyle = 'rgba(101, 57, 87, 0.16)';
       ctx.fillRect(0, 0, this.width, this.height);
     } else if (phase.id === 'night' && this.mode !== 'title') {
-      ctx.save();
-      ctx.fillStyle = 'rgba(14, 5, 32, 0.72)';
-      ctx.fillRect(0, 0, this.width, this.height);
-      ctx.globalCompositeOperation = 'destination-out';
+      const shade = this.lightCtx;
+      shade.clearRect(0, 0, this.width, this.height);
+      shade.save();
+      shade.fillStyle = 'rgba(14, 5, 32, 0.72)';
+      shade.fillRect(0, 0, this.width, this.height);
+      shade.globalCompositeOperation = 'destination-out';
 
       const px = p.x - cx;
       const py = p.y - cy;
       const lanternR = trips.has('velvet_fog') ? 240 : 155;
-      const pg = ctx.createRadialGradient(px, py, 24, px, py, lanternR);
+      const pg = shade.createRadialGradient(px, py, 24, px, py, lanternR);
       pg.addColorStop(0, 'rgba(0,0,0,0.94)');
       pg.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = pg;
-      ctx.beginPath();
-      ctx.arc(px, py, lanternR, 0, Math.PI * 2);
-      ctx.fill();
+      shade.fillStyle = pg;
+      shade.beginPath();
+      shade.arc(px, py, lanternR, 0, Math.PI * 2);
+      shade.fill();
+
+      if (this.lanternGlow) {
+        const lx = this.lanternGlow.x - cx;
+        const ly = this.lanternGlow.y - cy;
+        const glow = shade.createRadialGradient(lx, ly, 20, lx, ly, 145);
+        glow.addColorStop(0, '#000');
+        glow.addColorStop(1, '#0000');
+        shade.fillStyle = glow;
+        shade.fillRect(lx - 145, ly - 145, 290, 290);
+      }
 
       for (const lm of LANDMARKS) {
         if (!lm.isWarmRefuge) continue;
         const lx = lm.x - cx;
         const ly = lm.y - cy;
         if (lx < -260 || lx > this.width + 260 || ly < -260 || ly > this.height + 260) continue;
-        const lg = ctx.createRadialGradient(lx, ly, 36, lx, ly, 230);
+        const lg = shade.createRadialGradient(lx, ly, 36, lx, ly, 230);
         lg.addColorStop(0, 'rgba(0,0,0,1)');
         lg.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = lg;
-        ctx.beginPath();
-        ctx.arc(lx, ly, 230, 0, Math.PI * 2);
-        ctx.fill();
+        shade.fillStyle = lg;
+        shade.beginPath();
+        shade.arc(lx, ly, 230, 0, Math.PI * 2);
+        shade.fill();
       }
 
       for (const b of this.state.buildings) {
@@ -4714,36 +5048,93 @@ export class GameEngine {
                   : megaLamp
                     ? 250
                     : 185;
-          const lg = ctx.createRadialGradient(lx, ly, 30, lx, ly, lr);
+          const lg = shade.createRadialGradient(lx, ly, 30, lx, ly, lr);
           lg.addColorStop(0, 'rgba(0,0,0,1)');
           lg.addColorStop(1, 'rgba(0,0,0,0)');
-          ctx.fillStyle = lg;
-          ctx.beginPath();
-          ctx.arc(lx, ly, lr, 0, Math.PI * 2);
-          ctx.fill();
+          shade.fillStyle = lg;
+          shade.beginPath();
+          shade.arc(lx, ly, lr, 0, Math.PI * 2);
+          shade.fill();
         }
+      }
+      shade.restore();
+      ctx.drawImage(this.lightCanvas, 0, 0);
+    }
+
+    // The brew pigment stays visible under night lighting and behind navigation and HUD.
+    if (this.mode !== 'title' && trips.size > 0 && intensity > 0) {
+      ctx.save();
+      ctx.translate(-cx, -cy);
+      const brew = selectTripMotif(trips, tripProfile.dominantTrip, tripProfile.synergy?.id ?? null);
+      if (brew && this.perception.weights.focus > 0.005) {
+        const anchors: Array<{ x: number; y: number }> = [];
+        if (brew === 'kaleido' || brew === 'cosmic' || brew === 'velvet_fog') {
+          for (const object of this.state.objects) {
+            if (object.respawn > 0 || !within(p.x, p.y, object, 210)) continue;
+            anchors.push({ x: object.x, y: object.y });
+            if (anchors.length >= 7) break;
+          }
+          if (!anchors.length) anchors.push({ x: p.x - 48, y: p.y + 22 });
+        }
+        drawTripMotif(ctx, {
+          brew, synergy: tripProfile.synergy?.id ?? null, x: p.x, y: p.y,
+          strength: tripPaintStrength(intensity, this.perception.weights.focus, tripProfile.stageFactor),
+          phase: this.perception.ambientTime, still: rm, anchors,
+        });
       }
       ctx.restore();
     }
 
-    // Screen-space perceptual trip & Bad Trip Melt Spiral optical overlay (under HUD)
-    if (this.mode !== 'title') {
-      drawTripScreenOverlay(
-        ctx,
-        this.width,
-        this.height,
-        t,
-        trips,
-        tripProfile,
-        p.x - cx,
-        p.y - cy,
-        nearTotemRender,
-        rm,
-        this.state.audioSettings.effectStrength ?? 1,
-        Boolean(this.state.audioSettings.flashFree),
-      );
-    }
+    this.ctx.drawImage(this.worldCanvas, 0, 0);
+    this.perception.drawBramble(this.ctx, this.width, this.height, this.fieldAssets.bramble);
+    this.drawReadabilityPass(cx, cy, t, still || intensity === 0);
+  }
 
+  private drawReadabilityPass(cx: number, cy: number, t: number, still: boolean): void {
+    const ctx = this.ctx;
+    const p = this.state.player;
+    if (this.mode === 'playing') {
+      ctx.save();
+      ctx.translate(-cx, -cy);
+      drawExpeditionNavigation(ctx, this.fieldAssets, this.state.expeditions, this.camX, this.camY,
+        Math.hypot(this.width, this.height) * 0.65, millpondBankAt(p.x, p.y)?.label);
+      if (this.trailRun) {
+        const { id, gateIndex } = this.trailRun;
+        const gate = RIBBON_TRAILS[id].gates[gateIndex];
+        if (Math.abs(gate.x - this.camX) <= this.width / 2 + 100 && Math.abs(gate.y - this.camY) <= this.height / 2 + 100) {
+          drawRibbonGate(ctx, gate, gateIndex);
+        }
+      }
+      if (this.fishing.active) drawFishingSession(ctx, p, this.fishing, t, still);
+      const waypoint = this.getDisplayedWaypoint();
+      if (this.state.ghostTimer > 0) {
+        const ref = findNearestWarmRefuge(p.x, p.y, this.state.buildings);
+        drawWorldCompass(ctx, p.x, p.y, ref.angle, '#ff9f1c');
+      } else if (waypoint) {
+        const angle = Math.atan2(waypoint.y - p.y, waypoint.x - p.x);
+        drawWorldCompass(ctx, p.x, p.y, angle, '#ffd166');
+      }
+      if (!this.activeModal && this.nearestPrompt) drawInteractPrompt(ctx, this.nearestPrompt);
+      for (const plot of this.state.buildings) {
+        if (!plot.crop || plot.type !== 'mood_plot' || !within(p.x, p.y, plot, 165)) continue;
+        const crop = CROPS[plot.crop];
+        const stage = isCropReady(plot.crop, plot.growth) ? 'Harvest' :
+          plot.growth >= crop.time * 0.5 ? 'Growing' : 'Sprout';
+        drawInteractPrompt(ctx, { x: plot.x, y: plot.y + 90, label: stage, accent: '#72efdd' });
+      }
+      ctx.font = '800 13px "Plus Jakarta Sans", sans-serif';
+      ctx.textAlign = 'center';
+      for (const pop of this.state.popups) {
+        ctx.globalAlpha = Math.min(1, pop.life / 0.4);
+        ctx.strokeStyle = '#160c24';
+        ctx.lineWidth = 4;
+        ctx.strokeText(pop.text, pop.x, pop.y);
+        ctx.fillStyle = pop.color;
+        ctx.fillText(pop.text, pop.x, pop.y);
+      }
+      ctx.restore();
+      this.visualCues.drawStamps(ctx, this.state.audioSettings, cx, cy, this.width, this.height, this.fieldAssets.cues);
+    }
     if (this.joy.active) {
       ctx.strokeStyle = 'rgba(247, 239, 222, 0.55)';
       ctx.lineWidth = 3.5;
@@ -4879,6 +5270,20 @@ export class GameEngine {
 
     this.callbacks.onHudUpdate({
       mode: this.mode,
+      expeditions: {
+        millpond: { ...this.state.expeditions.millpond },
+        hollow: { ...this.state.expeditions.hollow },
+      },
+      millpondBank: millpondBankAt(p.x, p.y) ?? null,
+      nearExpeditionCamp: within(p.x, p.y,
+        this.state.expeditions.hollow.status === 'active' ? HOLLOW_SHELTER : GROVE_CAMP,
+        this.state.expeditions.hollow.status === 'active' ? HOLLOW_SAFE_RADIUS : 220),
+      steamKitchen: this.steamHeatTimer > 0,
+      landmarkCue: this.resonantLandmark?.name ?? null,
+      hollowWeather: this.state.expeditions.hollow.status === 'active' &&
+        this.state.expeditions.hollow.day === this.state.day && within(p.x, p.y, HOLLOW, HOLLOW_ZONE_RADIUS)
+        ? { seconds: this.state.expeditions.hollow.elapsed, sheltered: within(p.x, p.y, HOLLOW_SHELTER, HOLLOW_SAFE_RADIUS) }
+        : null,
       weather: {
         current: weather,
         next: getCountyWeather(this.state.worldSeed, this.state.day + 1),
@@ -4974,8 +5379,14 @@ export class GameEngine {
       nearestRefugeAngle: refuge.angle,
       timingCue: physics.timingCue,
       radioBroadcastLine: radioLine,
+      soundCaption: this.visualCues.caption(
+        this.state.audioSettings, this.camX - this.width / 2, this.camY - this.height / 2, this.width, this.height,
+      ),
+      meltPressure: getMeltPressure(p.vibe, p.maxVibe, this.state.ghostTimer > 0),
+      shelteredAtRefuge: this.shelteredAtRefuge || refuge.dist < 175,
       audioSettings: { ...this.state.audioSettings },
       reducedMotion: this.state.reducedMotion,
+      reducedMotionOverride: this.state.reducedMotionOverride ?? null,
       difficultyMode: this.state.difficultyMode || 'standard',
       gear: { ...p.gear },
       stats: { ...this.state.stats },
@@ -5002,7 +5413,7 @@ export class GameEngine {
       activeMealBuff: this.state.activeMealBuff ? { name: this.state.activeMealBuff.name, rem: this.state.activeMealBuff.rem } : null,
       deathReason: this.state.deathReason,
       victory: this.state.victory,
-      muted: this.state.audioSettings.muted,
+      muted: this.state.audioSettings.muted || this.state.audioSettings.master === 0,
       promptLabel: this.nearestPrompt?.label ?? null,
       playerX: p.x,
       playerY: p.y,

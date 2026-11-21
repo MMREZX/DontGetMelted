@@ -1,4 +1,5 @@
 import type { CampJob, CampProgress, TrailId, WeatherId } from './fieldwork.ts';
+import type { ExpeditionProgress } from './expeditions.ts';
 
 export type GameMode = 'title' | 'playing' | 'paused' | 'gameover';
 
@@ -84,7 +85,7 @@ export type PhaseId = 'day' | 'dusk' | 'night';
 export type DifficultyMode = 'standard' | 'relaxed' | 'harsh';
 export type FerryFollowUpChoice = 'lure_reflected' | 'bait_garden' | 'comfort_stop';
 
-export type FishId = 'spool_perch' | 'mirror_minnow' | 'receipt_eel';
+export type FishId = 'spool_perch' | 'mirror_minnow' | 'receipt_eel' | 'reed_perch';
 export type FishingPhase =
   | 'idle'
   | 'casting'
@@ -117,6 +118,8 @@ export interface FishingSession {
   rewardCommitted: boolean;
   lastOutcome: '' | 'landed' | 'escaped';
   lastFishName: string;
+  shadedBank?: boolean;
+  steadyReflection?: boolean;
 }
 
 export interface WaterRipple {
@@ -168,6 +171,8 @@ export interface DisciplineProgress {
   tier: 1 | 2 | 3 | 4 | 5;
   perk: PerkId | null;
   distinctActions: string[];
+  practiceDay?: number;
+  dailyActions?: Record<string, number>;
 }
 
 export interface JournalSketch {
@@ -198,7 +203,6 @@ export interface TripSynergyDef {
   pair: [TripId, TripId];
   name: string;
   accent: string;
-  visualDesc: string;
   bonusDesc: string;
   speedBonus?: number;
   enemyTimeScale?: number;
@@ -219,41 +223,8 @@ export interface TripProfile {
   euphoriaIntensity: number; // 0..1 good-trip peak strength
   badTripIntensity: number; // 0..1 bad-trip melt spiral strength
   dominantTrip: TripId | null;
-  cameraZoomAmp: number;
-  chromaSplit: number;
   enemyTimeScale: number;
   playerSpeedMult: number;
-}
-
-export interface TracerSnapshot {
-  x: number;
-  y: number;
-  facing: number;
-  bob: number;
-  elevation: 0 | 1;
-  color: string;
-  alpha: number;
-  charId: CharacterId;
-}
-
-export interface SoundWaveRipple {
-  x: number;
-  y: number;
-  radius: number;
-  maxRadius: number;
-  color: string;
-  glyph: string;
-  life: number;
-  maxLife: number;
-}
-
-export interface BadTripPhantom {
-  x: number;
-  y: number;
-  life: number;
-  maxLife: number;
-  whisper: string;
-  seed: number;
 }
 
 export type CropId =
@@ -579,6 +550,8 @@ export interface RecipeDef {
   out?: Record<string, number>;
   reqDisciplines?: Partial<Record<DisciplineId, number>>;
   reqStation?: 'funk_blender' | 'workbench';
+  fieldCraft?: boolean;
+  requiresMillpond?: boolean;
   practiceHint?: string;
 }
 
@@ -672,12 +645,14 @@ export interface WorldFlags {
 }
 
 export interface AudioSettings {
+  master: number;
   music: number; // 0..1
   ambience: number; // 0..1
   effects: number; // 0..1
   muted: boolean;
-  effectStrength?: number; // 0..1 perceptual trip visual strength
-  flashFree?: boolean;
+  perceptionIntensity: number;
+  visualSoundCues: boolean;
+  flashFree: boolean;
   stableCamera?: boolean;
 }
 
@@ -790,6 +765,8 @@ export interface Projectile {
   life: number;
   damage: number;
   color: string;
+  pierced?: string[];
+  rangBell?: boolean;
 }
 
 export interface FallingDuck {
@@ -863,6 +840,7 @@ export interface Waypoint {
 export interface GameState {
   version: number;
   camp: CampProgress;
+  expeditions: ExpeditionProgress;
   worldSeed: number;
   time: number;
   dayTime: number;
@@ -890,6 +868,7 @@ export interface GameState {
   disciplines?: Record<DisciplineId, DisciplineProgress>;
   audioSettings: AudioSettings;
   reducedMotion: boolean;
+  reducedMotionOverride?: boolean | null;
   difficultyMode?: 'standard' | 'relaxed' | 'harsh';
   fishingToggleAssist?: boolean;
   movingBuildingId?: string | null;
@@ -949,6 +928,12 @@ export interface CountySyncStatus {
 
 export interface HudSnapshot {
   mode: GameMode;
+  expeditions: ExpeditionProgress;
+  millpondBank: { label: string; shaded: boolean } | null;
+  nearExpeditionCamp: boolean;
+  steamKitchen: boolean;
+  landmarkCue: string | null;
+  hollowWeather: { seconds: number; sheltered: boolean } | null;
   weather: { current: WeatherId; next: WeatherId; active: boolean; sheltered: boolean };
   fieldwork: {
     provisions: number;
@@ -1022,8 +1007,12 @@ export interface HudSnapshot {
   nearestRefugeAngle: number;
   timingCue: RegionTimingCue | null;
   radioBroadcastLine: string | null;
+  soundCaption: string | null;
+  meltPressure: number;
+  shelteredAtRefuge: boolean;
   audioSettings: AudioSettings;
   reducedMotion: boolean;
+  reducedMotionOverride: boolean | null;
   difficultyMode: 'standard' | 'relaxed' | 'harsh';
   gear: PlayerState['gear'];
   stats: RunStats;

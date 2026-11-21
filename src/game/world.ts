@@ -6,6 +6,7 @@ import type {
   TransportId,
   WorldFeatureProp,
 } from './types.ts';
+import { HOLLOW, HOLLOW_SHELTER, MILLPOND } from './expeditions.ts';
 
 // Unified County Coordinate Space: ~±11,800 world units.
 // At ~220 px/s normal walking speed:
@@ -86,6 +87,31 @@ export const LANDMARKS: LandmarkDef[] = [
     desc: 'Warm refuge yard & upper entrance to the old Lamp-Service Tunnel.',
     isWarmRefuge: true,
     transportId: 'lamp_service_tunnel',
+  },
+  {
+    id: 'lm_singing_millpond',
+    name: MILLPOND.label,
+    regionId: 'giggle_grove',
+    x: MILLPOND.x, y: MILLPOND.y,
+    kind: 'overlook',
+    desc: 'Reed Perch rise beside a shaded willow bank. Open the Camp Ledger for the restoration route.',
+  },
+  {
+    id: 'lm_hollow_waterwheel',
+    name: HOLLOW.label,
+    regionId: 'undertone_caverns',
+    x: HOLLOW.x, y: HOLLOW.y,
+    kind: 'overlook',
+    desc: 'Rose chalk and the remains of a waterwheel lie beyond the sheltered trailhead.',
+  },
+  {
+    id: 'lm_hollow_trailhead',
+    name: HOLLOW_SHELTER.label,
+    regionId: 'undertone_caverns',
+    x: HOLLOW_SHELTER.x, y: HOLLOW_SHELTER.y,
+    kind: 'settlement',
+    desc: 'A refuge for banking Chalk-Quartz and marking the return route.',
+    isWarmRefuge: true,
   },
 
   // Inner County Landmarks

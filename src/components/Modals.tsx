@@ -210,7 +210,7 @@ export function Modals({
   }, [modal, engine]);
 
   // PAUSE MODAL
-  if (hud.mode === 'paused') {
+  if (hud.mode === 'paused' && modal !== 'settings') {
     return (
       <ModalShell title="Adventure Paused" subtitle={`${CHARACTERS[hud.charId].name} · Day ${hud.day} · ${hud.biomeName}`}>
         <div className="grid grid-cols-3 gap-3 mb-5">
@@ -256,6 +256,13 @@ export function Modals({
               Restart Run
             </button>
           </div>
+          <button
+            type="button"
+            onClick={() => engine?.setActiveModal('settings')}
+            className="ink-button min-h-11 rounded-xl border border-[#f7efde]/35 bg-[#2d1a4b] text-sm font-bold text-[#f7efde] cursor-pointer"
+          >
+            Settings
+          </button>
           <button
             type="button"
             onClick={onTitle}
@@ -344,6 +351,8 @@ export function Modals({
   // AUDIO, COMFORT & DIFFICULTY SETTINGS MODAL
   if (modal === 'settings') {
     const a = hud.audioSettings;
+    const titleSettings = hud.mode === 'title';
+    const previewMuted = a.muted || a.master === 0 || a.effects === 0;
     const difficulties: { id: DifficultyMode; label: string; note: string }[] = [
       { id: 'relaxed', label: 'Relaxed', note: 'Gentler tension & calmer nights' },
       { id: 'standard', label: 'Standard', note: 'Balanced county survival' },
@@ -351,16 +360,16 @@ export function Modals({
     ];
     return (
       <ModalShell
-        title="Audio, Comfort & Difficulty"
-        subtitle="Tune sound, trip effect strength, flash-free comfort, fishing assist, and survival difficulty."
+        title={titleSettings ? 'Audio & Comfort' : 'Audio, Comfort & Difficulty'}
         onClose={onClose}
       >
         <div className="flex flex-col gap-3.5">
           {[
+            { key: 'master' as const, label: 'Master Volume', value: a.master, accent: '#f7efde' },
             { key: 'music' as const, label: 'Regional Music', value: a.music, accent: '#ff5d8f' },
             { key: 'ambience' as const, label: 'County Ambience', value: a.ambience, accent: '#2ec4b6' },
             { key: 'effects' as const, label: 'Boops & Chimes', value: a.effects, accent: '#ffd166' },
-            { key: 'effectStrength' as const, label: 'Trip Effect Strength', value: a.effectStrength ?? 1, accent: '#b388ff' },
+            { key: 'perceptionIntensity' as const, label: 'Perception Intensity', value: a.perceptionIntensity, accent: '#b388ff' },
           ].map((row) => (
             <label key={row.key} className="flex flex-col gap-1.5 rounded-xl bg-[#160c24]/90 border border-[#f7efde]/15 p-3">
               <div className="flex items-center justify-between text-xs font-extrabold">
@@ -372,17 +381,12 @@ export function Modals({
               </div>
               <input
                 type="range"
+                aria-label={row.label}
                 min={0}
                 max={100}
                 value={Math.round(row.value * 100)}
-                onChange={(e) =>
-                  engine.updateAudioSettings(
-                    row.key === 'effectStrength'
-                      ? { effectStrength: Number(e.target.value) / 100 }
-                      : { [row.key]: Number(e.target.value) / 100, muted: false },
-                  )
-                }
-                className="w-full accent-[#ffd166] cursor-pointer"
+                onChange={(e) => engine.updateAudioSettings({ [row.key]: Number(e.target.value) / 100 })}
+                className="min-h-11 w-full accent-[#ffd166] cursor-pointer"
               />
             </label>
           ))}
@@ -391,27 +395,32 @@ export function Modals({
             <button
               type="button"
               onClick={() => engine.toggleMute()}
-              className={`ink-button py-2.5 px-3 rounded-xl font-extrabold text-xs border-2 border-[#160c24] cursor-pointer ${
-                a.muted ? 'bg-[#ff5d8f] text-[#160c24]' : 'bg-[#2d1a4b] text-[#f7efde]'
+              aria-pressed={hud.muted}
+              className={`ink-button min-h-11 px-3 rounded-xl font-extrabold text-xs border-2 border-[#160c24] cursor-pointer ${
+                hud.muted ? 'bg-[#ff5d8f] text-[#160c24]' : 'bg-[#2d1a4b] text-[#f7efde]'
               }`}
             >
-              {a.muted ? 'Audio Muted (Unmute)' : 'Mute All Audio'}
+              {hud.muted ? 'Unmute Audio' : 'Mute All Audio'}
             </button>
 
-            <button
-              type="button"
-              onClick={() => engine.toggleReducedMotion()}
-              className={`ink-button py-2.5 px-3 rounded-xl font-extrabold text-xs border-2 border-[#160c24] cursor-pointer ${
-                hud.reducedMotion ? 'bg-[#2ec4b6] text-[#160c24]' : 'bg-[#2d1a4b] text-[#f7efde]'
-              }`}
-            >
-              {hud.reducedMotion ? 'Reduced Motion: ON' : 'Reduced Motion: OFF'}
-            </button>
+            <label className="flex items-center justify-between gap-2 rounded-xl border border-[#f7efde]/30 bg-[#160c24] px-3 text-xs font-bold text-[#f7efde]">
+              Reduced Motion
+              <select
+                value={hud.reducedMotionOverride === null ? 'system' : hud.reducedMotionOverride ? 'on' : 'off'}
+                onChange={(event) => engine.setReducedMotion(event.target.value === 'system' ? null : event.target.value === 'on')}
+                className="min-h-11 cursor-pointer bg-[#160c24] text-[#f7efde]"
+              >
+                <option value="system">System</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
 
             <button
               type="button"
               onClick={() => engine.updateAudioSettings({ flashFree: !a.flashFree })}
-              className={`ink-button py-2.5 px-3 rounded-xl font-extrabold text-xs border-2 border-[#160c24] cursor-pointer ${
+              aria-pressed={a.flashFree}
+              className={`ink-button min-h-11 px-3 rounded-xl font-extrabold text-xs border-2 border-[#160c24] cursor-pointer ${
                 a.flashFree ? 'bg-[#ffd166] text-[#160c24]' : 'bg-[#2d1a4b] text-[#f7efde]'
               }`}
             >
@@ -420,27 +429,52 @@ export function Modals({
 
             <button
               type="button"
+              onClick={() => engine.updateAudioSettings({ visualSoundCues: !a.visualSoundCues })}
+              aria-pressed={a.visualSoundCues}
+              className={`ink-button min-h-11 px-3 rounded-xl font-extrabold text-xs border-2 border-[#160c24] cursor-pointer ${
+                a.visualSoundCues ? 'bg-[#72efdd] text-[#160c24]' : 'bg-[#2d1a4b] text-[#f7efde]'
+              }`}
+            >
+              Visual Sound Cues · {a.visualSoundCues ? 'On' : a.muted || a.master === 0 ? 'Auto (muted)' : 'Off'}
+            </button>
+
+            <button
+              type="button"
               data-testid="toggle-stable-camera"
               onClick={() => engine.updateAudioSettings({ stableCamera: !a.stableCamera })}
-              className={`ink-button py-2.5 px-3 rounded-xl font-extrabold text-xs border-2 border-[#160c24] cursor-pointer ${
+              aria-pressed={a.stableCamera}
+              className={`ink-button min-h-11 px-3 rounded-xl font-extrabold text-xs border-2 border-[#160c24] cursor-pointer ${
                 a.stableCamera ? 'bg-[#a8ff3e] text-[#160c24]' : 'bg-[#2d1a4b] text-[#f7efde]'
               }`}
             >
               {a.stableCamera ? 'Stable Camera: ON' : 'Stable Camera: OFF'}
             </button>
 
-            <button
+            {!titleSettings && <button
               type="button"
               onClick={() => engine.toggleFishingAssist()}
-              className={`ink-button py-2.5 px-3 rounded-xl font-extrabold text-xs border-2 border-[#160c24] cursor-pointer ${
+              aria-pressed={hud.fishing.toggleAssist}
+              className={`ink-button min-h-11 px-3 rounded-xl font-extrabold text-xs border-2 border-[#160c24] cursor-pointer ${
                 hud.fishing.toggleAssist ? 'bg-[#72efdd] text-[#160c24]' : 'bg-[#2d1a4b] text-[#f7efde]'
               }`}
             >
               {hud.fishing.toggleAssist ? 'Fishing Toggle Assist: ON' : 'Fishing Toggle Assist: OFF'}
-            </button>
+            </button>}
           </div>
 
-          <div className="rounded-xl bg-[#160c24]/90 border border-[#f7efde]/15 p-3">
+          <div className="flex flex-wrap items-center gap-2 border-t border-[#f7efde]/15 pt-3">
+            <button type="button" onClick={() => engine.restoreDefaultEffects()}
+              className="ink-button min-h-11 rounded-xl bg-[#ffd166] px-3 text-xs font-extrabold text-[#160c24] cursor-pointer">
+              Restore Audio &amp; Visual Effects
+            </button>
+            <button type="button" onClick={() => engine.previewSoundEffects()} disabled={previewMuted}
+              className="ink-button min-h-11 rounded-xl border border-[#72efdd] bg-[#160c24] px-3 text-xs font-extrabold text-[#72efdd] enabled:cursor-pointer disabled:opacity-45">
+              Test Sound Effects
+            </button>
+            {a.perceptionIntensity === 0 && <p className="text-xs font-bold text-[#ffd166]">Perception effects are off.</p>}
+          </div>
+
+          {!titleSettings && <div className="rounded-xl bg-[#160c24]/90 border border-[#f7efde]/15 p-3">
             <div className="text-[11px] font-extrabold uppercase tracking-wider text-[#ffd166] mb-2">
               Survival Difficulty
             </div>
@@ -466,10 +500,10 @@ export function Modals({
                 );
               })}
             </div>
-          </div>
+          </div>}
 
-          <p className="text-[11px] text-[#f7efde]/70">
-            All regional rules, fishing bite cues, and ferry horn ripples include visual indicators so the entire county is playable muted and in Reduced Motion.
+          <p className="text-[11px] text-[#f7efde]/85">
+            Fishing prompts and timing cues stay visible at 0% perception intensity. Sound captions turn on automatically for muted channels.
           </p>
         </div>
       </ModalShell>
@@ -1497,7 +1531,7 @@ export function Modals({
                     <p className="text-xs text-[#f7efde]/82 leading-snug">{it.desc || it.quote || 'Crafting & barter resource.'}</p>
                     {tripMeta && (
                       <div className="text-[11px] font-semibold leading-snug" style={{ color: tripMeta.accent }}>
-                        Optics: {tripMeta.effectSummary}
+                        {tripMeta.effectSummary}
                       </div>
                     )}
                     {statParts.length > 0 && (
@@ -1533,7 +1567,7 @@ export function Modals({
                         >
                           {isGrounding ? 'Sip & Ground' : it.cat === 'sub' ? 'Consume Brew' : k === 'junk_mail' ? 'Throw Decoy' : 'Eat Snack'}
                         </button>
-                        {(k === 'spool_perch' || k === 'mirror_minnow' || k === 'receipt_eel') && (
+                        {(k === 'spool_perch' || k === 'mirror_minnow' || k === 'receipt_eel' || k === 'reed_perch') && (
                           <button
                             type="button"
                             onClick={() => engine.releaseFish(k)}
@@ -1577,7 +1611,6 @@ export function Modals({
                         )}
                       </div>
                       <div className="text-[11px] font-bold text-[#ffd166]">{pairNames}</div>
-                      <p className="text-[11px] text-[#f7efde]/82 leading-snug">{syn.visualDesc}</p>
                       <div className="text-[10px] font-extrabold text-[#2ec4b6] mt-0.5">{syn.bonusDesc}</div>
                     </div>
                   );
@@ -1670,8 +1703,11 @@ export function Modals({
           </button>
         </div>
 
+        <p className="mb-3 rounded-lg border border-[#ffd166]/40 bg-[#160c24] px-3 py-2 text-xs font-bold text-[#fff1cf]">
+          {hud.shelteredAtRefuge ? 'Sheltered work · Cool-Mint Brew yields one extra draught here.' : 'Field work · Craft portable supplies while exposed.'}
+        </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {RECIPES.map((r) => {
+          {RECIPES.filter((recipe) => !recipe.requiresMillpond || hud.expeditions.millpond.status === 'restored').map((r) => {
             const check = canCraftRecipe(r, hud.inv, hud.nearBlender, hud.gear, hud.unlockedStyles, {
               nearWorkbench: hud.nearWorkbench,
               disciplines: hud.disciplines,

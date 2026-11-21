@@ -24,7 +24,9 @@ export default function App() {
   }>({});
   const isPlaying = hud?.mode === 'playing';
   const isTitle = !hud || hud.mode === 'title';
-  const dialogOpen = !isTitle && Boolean(modal || !isPlaying);
+  const titleSettingsOpen = isTitle && modal === 'settings';
+  const dialogOpen = Boolean(modal || (!isTitle && !isPlaying));
+  const titleSettingsVisited = useRef(false);
 
   useLayoutEffect(() => {
     if (isPlaying && !dialogOpen) {
@@ -32,6 +34,14 @@ export default function App() {
       (previous?.isConnected ? previous : canvasRef.current)?.focus({ preventScroll: true });
     }
   }, [dialogOpen, isPlaying]);
+
+  useLayoutEffect(() => {
+    if (titleSettingsOpen) titleSettingsVisited.current = true;
+    else if (isTitle && titleSettingsVisited.current) {
+      document.getElementById('title-settings')?.focus({ preventScroll: true });
+      titleSettingsVisited.current = false;
+    }
+  }, [isTitle, titleSettingsOpen]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -114,13 +124,17 @@ export default function App() {
 
       {/* Title Screen Overlay */}
       {isTitle && (
-        <TitleScreen
-          selectedChar={selectedChar}
-          onSelectChar={setSelectedChar}
-          onStart={handleStart}
-          hasSave={hasSave}
-          onResume={handleResumeSave}
-        />
+        <div inert={titleSettingsOpen} className="contents">
+          <TitleScreen
+            selectedChar={selectedChar}
+            onSelectChar={setSelectedChar}
+            onStart={handleStart}
+            hasSave={hasSave}
+            onResume={handleResumeSave}
+            onSettings={() => engineRef.current?.setActiveModal('settings')}
+            settingsOpen={titleSettingsOpen}
+          />
+        </div>
       )}
 
       {/* Active Playing HUD */}
@@ -155,7 +169,7 @@ export default function App() {
       )}
 
       {/* Gameplay Modals, Pause, and Game Over */}
-      {hud && hud.mode !== 'title' && (
+      {hud && (!isTitle || titleSettingsOpen) && (
         <Modals
           engine={engineRef.current}
           hud={hud}

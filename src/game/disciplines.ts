@@ -56,14 +56,14 @@ export const DISCIPLINES: Record<DisciplineId, DisciplineDef> = {
         id: 'graft_sage',
         discipline: 'farming',
         name: 'Graft Sage',
-        desc: '+60% hybrid crossbreed odds & Bell Reeds mature 35% faster.',
+        desc: 'Boosts hybrid odds by 60%, grows Bell Reeds 35% faster, and adds one of each harvest item.',
         accent: '#a7c957',
       },
       {
         id: 'hydro_tender',
         discipline: 'farming',
         name: 'Hydro Tender',
-        desc: 'Plots near a Rain Trough or Choir Irrigator grow at 2x speed automatically.',
+        desc: 'Doubles growth within 220 paces of a Rain Trough or Choir Irrigator. Compliments add four extra growth.',
         accent: '#4cc9f0',
       },
     ],
@@ -85,14 +85,14 @@ export const DISCIPLINES: Record<DisciplineId, DisciplineDef> = {
         id: 'current_reader',
         discipline: 'angling',
         name: 'Current Reader',
-        desc: '+0.65s wider bite window & +15% faster reeling in ink currents.',
+        desc: 'Adds 0.65 seconds to hook a bite and increases calm reeling speed by 15%.',
         accent: '#4cc9f0',
       },
       {
         id: 'stillwater_keeper',
         discipline: 'angling',
         name: 'Stillwater Keeper',
-        desc: 'Bonus reflected Mirror Minnow catch value & Rain Trough camp spawns calm ripples.',
+        desc: 'Keeps reflected fish interested through small wakes and gives two Mirror Minnows per landed catch.',
         accent: '#ffd166',
       },
     ],
@@ -114,14 +114,14 @@ export const DISCIPLINES: Record<DisciplineId, DisciplineDef> = {
         id: 'provisioner',
         discipline: 'cookery',
         name: 'Provisioner',
-        desc: 'Cooked travel meals last +40% longer & restore +15 extra Munch.',
+        desc: 'Cooks one extra serving of Ferryman’s Perch Chowder or Grove Hearth Broth.',
         accent: '#f4a261',
       },
       {
         id: 'tablekeeper',
         discipline: 'cookery',
         name: 'Tablekeeper',
-        desc: 'Meals shared at Camp Table grant +25 bonus Vibe & extra visitor gifts.',
+        desc: 'Increases Vibe and Munch restored by food by 25%.',
         accent: '#ff85b3',
       },
     ],
@@ -143,7 +143,7 @@ export const DISCIPLINES: Record<DisciplineId, DisciplineDef> = {
         id: 'lens_smith',
         discipline: 'fabrication',
         name: 'Lens-Smith',
-        desc: 'Optical & crystal recipes save 1 Cosmic Crystal (minimum 1).',
+        desc: 'Saves one Cosmic Crystal on optical recipes that cost two or more crystals.',
         accent: '#72efdd',
       },
       {
@@ -179,7 +179,7 @@ export const DISCIPLINES: Record<DisciplineId, DisciplineDef> = {
         id: 'rigger',
         discipline: 'building',
         name: 'Rigger',
-        desc: 'Salvaging structures returns 100% materials & extends placement reach.',
+        desc: 'Returns every material when you salvage a structure.',
         accent: '#b388ff',
       },
     ],
@@ -201,7 +201,7 @@ export const DISCIPLINES: Record<DisciplineId, DisciplineDef> = {
         id: 'field_naturalist',
         discipline: 'field_botany',
         name: 'Field Naturalist',
-        desc: 'Bonus XP when observing reflections or releasing rare specimens.',
+        desc: 'Grants 35% more Field Botany practice for observing or releasing fish.',
         accent: '#a8ff3e',
       },
       {
@@ -230,7 +230,7 @@ export const DISCIPLINES: Record<DisciplineId, DisciplineDef> = {
         id: 'echo_listener',
         discipline: 'acoustics',
         name: 'Echo Listener',
-        desc: 'Acoustic bridge cycles hold +1.5s longer and wall taps echo twice as far.',
+        desc: 'Holds acoustic bridges open for 1.5 extra seconds and extends Wall Tap range to 480 paces.',
         accent: '#ff70a6',
       },
       {
@@ -259,7 +259,7 @@ export const DISCIPLINES: Record<DisciplineId, DisciplineDef> = {
         id: 'shortcut_surveyor',
         discipline: 'wayfinding',
         name: 'Shortcut Surveyor',
-        desc: '+10% walking speed along county roads & instant compass bearing updates.',
+        desc: 'Increases walking speed by 10% while surveying the county.',
         accent: '#48cae4',
       },
       {
@@ -295,7 +295,7 @@ export const DISCIPLINES: Record<DisciplineId, DisciplineDef> = {
         id: 'field_scout',
         discipline: 'creature_care',
         name: 'Field Scout',
-        desc: 'Active buddies trigger their gathering & scouting gifts 35% more often.',
+        desc: 'Travel companions find gifts every 16.25 seconds instead of every 25 seconds.',
         accent: '#a8ff3e',
       },
     ],
@@ -380,6 +380,7 @@ export function awardDisciplinePractice(
   current: DisciplineProgress,
   actionKey: string,
   baseXp: number,
+  day?: number,
 ): {
   next: DisciplineProgress;
   gainedXp: number;
@@ -388,7 +389,12 @@ export function awardDisciplinePractice(
   wasFirstTime: boolean;
 } {
   const alreadyDone = current.distinctActions.includes(actionKey);
-  const gainedXp = alreadyDone ? Math.max(4, Math.round(baseXp * 0.35)) : baseXp;
+  const attempts = day !== undefined && current.practiceDay === day ? current.dailyActions ?? {} : {};
+  const completedToday = Object.hasOwn(attempts, actionKey) ? attempts[actionKey] : 0;
+  const repeat = alreadyDone ? Math.max(4, Math.round(baseXp * 0.35)) : baseXp;
+  const gainedXp = day === undefined || completedToday === 0 ? repeat
+    : completedToday === 1 ? Math.floor(repeat * 0.25) : 0;
+  const daily = day === undefined ? {} : { practiceDay: day, dailyActions: { ...attempts, [actionKey]: Math.min(2, completedToday + 1) } };
   const nextXp = current.xp + gainedXp;
   const newTier = computeTierForXp(nextXp);
   const promoted = newTier > current.tier;
@@ -402,6 +408,7 @@ export function awardDisciplinePractice(
       xp: nextXp,
       tier: newTier,
       distinctActions,
+      ...daily,
     },
     gainedXp,
     promoted,

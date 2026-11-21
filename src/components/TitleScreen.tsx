@@ -11,6 +11,8 @@ interface TitleScreenProps {
   onStart: () => void;
   hasSave: boolean;
   onResume: () => void;
+  onSettings: () => void;
+  settingsOpen: boolean;
 }
 
 const CHAR_LIST: CharacterId[] = [
@@ -28,10 +30,11 @@ const CHAR_LIST: CharacterId[] = [
   'mossie',
 ];
 
-export function TitleScreen({ selectedChar, onSelectChar, onStart, hasSave, onResume }: TitleScreenProps) {
+export function TitleScreen({ selectedChar, onSelectChar, onStart, hasSave, onResume, onSettings, settingsOpen }: TitleScreenProps) {
   const radioGroup = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (settingsOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.repeat || e.altKey || e.ctrlKey || e.metaKey ||
           (e.target instanceof Element && e.target.closest('button, input, select, textarea, a[href], [contenteditable]'))) return;
@@ -48,7 +51,7 @@ export function TitleScreen({ selectedChar, onSelectChar, onStart, hasSave, onRe
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedChar, onSelectChar, onStart]);
+  }, [selectedChar, onSelectChar, onStart, settingsOpen]);
 
   function onRadioKey(event: ReactKeyboardEvent<HTMLDivElement>) {
     const offset = ['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 :
@@ -145,6 +148,14 @@ export function TitleScreen({ selectedChar, onSelectChar, onStart, hasSave, onRe
                 Resume Save
               </button>
             )}
+            <button
+              type="button"
+              id="title-settings"
+              onClick={onSettings}
+              className="ink-button min-h-11 rounded-xl border border-[#f7efde]/60 bg-[#2d1a4b] px-4 text-sm font-bold text-[#fffdf7] cursor-pointer"
+            >
+              Settings
+            </button>
           </div>
         </div>
       </div>

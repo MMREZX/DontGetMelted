@@ -27,11 +27,13 @@ Open the URL printed by Vite. The default is [localhost:3000](http://localhost:3
 | Camp Ledger | H |
 | Pause or close a menu | Esc |
 
-On touchscreens, drag on the left side of the world to move and use the HUD buttons for actions and menus. Settings include reduced motion, flash-free effects, stable camera, and a fishing reel toggle.
+On touchscreens, drag on the left side of the world to move and use the HUD buttons for actions and menus. Open Settings from the title screen, pause menu, or HUD. Reduced Motion can follow your system setting. Perception Intensity can be set to 0%, and visual sound cues appear automatically for muted channels. Master, music, ambience, and effects have separate volume controls. The in-game settings also include a fishing reel toggle.
 
 ## Camp Ledger
 
 - Check today’s and tomorrow’s weather before a long trip. A Paper Squall makes exposed evenings colder, while Emberfall uses up Munch faster in daylight.
+- Pin Delta Public Bank under First Fishing Trip. Borrow the reed rod, wait for **Hook Now**, and reel when the fish is calm. Bring your catch to a Camp Table for the ferry supper.
+- Under **Restoration field notes**, start the Singing Millpond outing. Tie the two marked ribbons, choose a fishing bank, and collect Cool-Mint before turning in at Mailbox Square. Restoring the pond opens Red-Chalk Hollow, where you can bank quartz and lead a stalled lantern moth back to shelter.
 - Use the community bench in Giggle-Grove or build your own camp site. Mark it from the ledger, stock Fizz Berries as rations, and give tamed companions dusk jobs. They can gather supplies, tend nearby Mood Soil, or watch a camp lamp. Build a Camp Relay at a workbench to improve gathering and tending.
 - Pin Lantern Loop or Marmalade Run from the ledger. The clock starts at the first gate. Roll through gold arches to clear them, then race the rest of the route. Each first finish awards a supply cache, and later attempts can improve your saved best time.
 
@@ -45,6 +47,8 @@ npm run preview
 ```
 
 Serve the generated `dist/` directory from a static web host.
+
+Open [the browser QA fixture](http://127.0.0.1:4317/tests/production-qa.html) while running the dev server on port 4317. It exercises both expeditions at 0% and 100% perception, Delta fishing, legacy saves, storm overlap, and mixer headroom in an isolated tab session.
 
 ## Cover illustration
 

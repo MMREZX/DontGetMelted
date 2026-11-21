@@ -201,6 +201,7 @@ export function GameHud({
   const f = hud.fishing;
   const weather = WEATHER[hud.weather.current];
   const ribbon = hud.fieldwork.trail;
+  const meltPercent = Math.round(hud.meltPressure * 100);
   const fishingPhaseLabel =
     f.phase === 'casting'
       ? 'Casting line...'
@@ -251,6 +252,12 @@ export function GameHud({
             trailColor="#b388ff"
             icon={<WobbleIcon className="w-4 h-4" />}
           />
+          <p className="flex flex-wrap items-center justify-between gap-x-2 text-[10px] font-bold text-[#f7efde]">
+            <span>Melt {meltPercent}%</span>
+            <span className={meltPercent >= 75 ? 'text-[#ffd166]' : 'text-[#f7efde]'}>
+              {hud.ghostTimer > 0 ? 'Follow refuge arrow' : meltPercent >= 75 ? 'Seek a warm refuge' : hud.shelteredAtRefuge ? 'Sheltered' : 'Exposed'}
+            </span>
+          </p>
 
           {/* Compact unboxed currency & XP line */}
           <div className="flex items-center justify-between gap-2 pt-1.5 mt-0.5 border-t border-[#f7efde]/12 text-[11px] font-mono-num text-[#f7efde]/90">
@@ -267,6 +274,14 @@ export function GameHud({
               XP {hud.xp}/{hud.xpNext}
             </span>
           </div>
+        </div>
+
+        <div aria-live="polite" aria-atomic="true">
+          {hud.soundCaption && (
+            <span data-testid="sound-caption" className="inline-block rounded-lg border border-[#f7efde] bg-[#160c24] px-2.5 py-1 text-xs font-bold text-[#f7efde]">
+              {hud.soundCaption}
+            </span>
+          )}
         </div>
 
         {/* Visible Region Timing Cue (100% readable when muted or in Reduced Motion) */}
@@ -289,6 +304,23 @@ export function GameHud({
               />
             </div>
           </div>
+        )}
+        {hud.hollowWeather && (
+          <div className="rounded-xl border-2 border-[#f4b8aa] bg-[#160c24] px-2.5 py-1.5 text-[11px] font-bold text-[#fff1cf]">
+            {hud.hollowWeather.sheltered ? 'Hollow shelter' : 'Exposed in Red-Chalk Hollow'}
+            <span className="mt-0.5 block text-[#f4b8aa]">
+              {hud.hollowWeather.seconds < 12
+                ? `Squall front in ${Math.ceil(12 - hud.hollowWeather.seconds)}s`
+                : hud.hollowWeather.seconds < 32 ? 'Storm front · return by ribbons'
+                  : hud.hollowWeather.seconds < 180 ? 'Squall peak · find shelter' : 'Squall passed'}
+            </span>
+          </div>
+        )}
+        {hud.steamKitchen && (
+          <button type="button" className="pointer-events-auto min-h-11 rounded-xl border border-[#ffd166] bg-[#160c24] px-2.5 text-left text-xs font-bold text-[#fff1cf]"
+            onClick={() => onOpenModal('cook')}>
+            Cook with Steam Vent [C]
+          </button>
         )}
 
         {/* Active State-Grounded Regional Event Bulletin */}
@@ -614,7 +646,7 @@ export function GameHud({
       )}
 
       {/* DELTA PUBLIC BANK & TACTILE FISHING PANEL */}
-      {(hud.nearDock || f.active) && !hud.movingBuildingId && (
+      {(hud.nearDock || hud.millpondBank || f.active) && !hud.movingBuildingId && (
         <div
           data-testid="fishing-hud-panel"
           className="fixed bottom-[126px] xl:bottom-[74px] left-1/2 -translate-x-1/2 w-[94vw] max-w-[460px] px-3 py-2.5 rounded-2xl bg-[#160c24]/95 border-2 border-[#72efdd] pointer-events-auto flex flex-col gap-2 shadow-xl"
@@ -622,15 +654,16 @@ export function GameHud({
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="font-display font-black text-xs sm:text-sm text-[#72efdd] truncate">
-                {f.active ? fishingPhaseLabel : 'Delta Public Bank · Loaner Reed Rod Ready'}
+                {f.active ? fishingPhaseLabel : hud.millpondBank ? 'Singing Millpond · Loaner Reed Rod' : 'Delta Public Bank · Loaner Reed Rod Ready'}
               </div>
               <div className="text-[10px] font-bold text-[#f7efde]/80 truncate">
+                {hud.millpondBank ? (hud.millpondBank.shaded ? 'Shaded bank · gentler water, slower bites' : 'Sunlit bank · faster bites, warmer exposure') : <>
                 Lamp on {slotNames[hud.dockLampSlot]} ·{' '}
                 {hud.dockReflectionIntact ? (
                   <span className="text-[#ffd166]">Reflection CALM (Mirror Minnow drawn!)</span>
                 ) : (
                   <span className="text-[#ff85b3]">Wake rippling — settling...</span>
-                )}
+                )}</>}
               </div>
             </div>
             <button
@@ -648,7 +681,7 @@ export function GameHud({
 
           {!f.active ? (
             <div className="flex flex-col gap-1.5">
-              <div className="grid grid-cols-3 gap-1.5">
+              {hud.nearDock && <div className="grid grid-cols-3 gap-1.5">
                 {[0, 1, 2].map((slotIdx) => {
                   const selected = f.castSlot === slotIdx;
                   const lit = hud.dockLampSlot === slotIdx;
@@ -667,28 +700,32 @@ export function GameHud({
                     </button>
                   );
                 })}
-              </div>
+              </div>}
               <div className="flex items-center gap-2">
-                <button
+                {hud.nearDock && <button
                   type="button"
                   data-testid="move-dock-lamp-btn"
                   onClick={() => onMoveDockLamp()}
                   className="ink-button py-1.5 px-3 rounded-lg bg-[#ffd166] text-[#160c24] font-extrabold text-xs border-2 border-[#160c24] cursor-pointer whitespace-nowrap"
                 >
                   Move Lamp [L]
-                </button>
+                </button>}
                 <button
                   type="button"
                   data-testid="cast-line-btn"
                   onClick={() => onStartCast(f.castSlot)}
                   className="ink-button flex-1 py-1.5 px-3 rounded-lg bg-[#2ec4b6] text-[#160c24] font-display font-black text-xs border-2 border-[#160c24] cursor-pointer"
                 >
-                  Cast Into {slotNames[f.castSlot]} [Space]
+                  {hud.millpondBank ? 'Cast for Reed Perch' : `Cast Into ${slotNames[f.castSlot]}`} [Space]
                 </button>
               </div>
             </div>
           ) : (
             <div className="flex flex-col gap-2">
+              {f.phase === 'bite' && (
+                <progress aria-label="Hook window" max={f.biteWindow} value={Math.max(0, f.phaseTimer)}
+                  className="h-2 w-full accent-[#ffd166]" />
+              )}
               {f.phase === 'tension' && (
                 <div className="grid grid-cols-2 gap-2 text-[10px] font-bold">
                   <div>

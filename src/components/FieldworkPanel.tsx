@@ -1,14 +1,84 @@
-import { CloudSun, Flag, TentTree } from 'lucide-react';
+import { CloudSun, Fish, Flag, MapPin, TentTree } from 'lucide-react';
 import { BIOMES, ITEMS } from '../game/data';
 import type { GameEngine } from '../game/engine';
 import { CAMP_JOBS, MAX_CAMP_PROVISIONS, RIBBON_TRAILS, WEATHER } from '../game/fieldwork';
 import type { CampJob, TrailId } from '../game/fieldwork';
 import type { HudSnapshot } from '../game/types';
+import { countSites, hollowReady, millpondReady, restorationPercent } from '../game/expeditions';
 
 const jobs = Object.keys(CAMP_JOBS) as CampJob[];
 const trails = Object.keys(RIBBON_TRAILS) as TrailId[];
 
 const action = 'ink-button rounded-lg border px-3 py-2 text-xs font-extrabold enabled:cursor-pointer disabled:opacity-45';
+
+function ExpeditionNotes({ hud, engine }: { hud: HudSnapshot; engine: GameEngine }) {
+  const { millpond, hollow } = hud.expeditions;
+  const cta = `${action} min-h-11 border-[#72efdd]/50 text-[#72efdd]`;
+  const restored = restorationPercent(hud.expeditions);
+  return (
+    <section aria-labelledby="field-expeditions" className="rounded-xl border border-[#72efdd]/40 bg-[#122330] p-3 sm:p-4">
+      <h3 id="field-expeditions" className="flex items-center gap-2 font-display text-lg font-black text-[#72efdd]">
+        <MapPin size={18} aria-hidden="true" /> Restoration field notes
+      </h3>
+      <p className="mt-1 text-xs text-[#f7efde]">Field expeditions restored {restored}% · County broadcast sites {hud.countySync.restoredCount}/{hud.countySync.totalRestorations}</p>
+      {hud.landmarkCue && <p className="mt-1 text-xs font-bold text-[#fff1cf]">Nearby landmark · {hud.landmarkCue}</p>}
+      <div className="mt-3 grid gap-3">
+        <div className="rounded-lg bg-[#160c24] p-3">
+          <h4 className="font-display text-sm font-black text-[#72efdd]">The Singing Millpond</h4>
+          {millpond.status === 'restored' ? <p className="mt-1 text-xs text-[#f7efde]">Restored. Cool-Mint Brew is available in Craft.</p> : (
+            <>
+              <p className="mb-2 mt-1 text-xs text-[#f7efde]">Tie two ribbons on the east road, catch a Reed Perch, and gather two Cool-Mint sprigs. The sunlit bank gets faster bites. The willow bank helps you cool down.</p>
+              {millpond.status === 'active' && <ul className="mb-2 flex flex-wrap gap-x-3 text-xs font-bold text-[#fff1cf]">
+                <li>Ribbons {countSites(millpond.ribbons)}/2</li><li>Reed Perch {Number(millpond.perchLanded)}/1</li><li>Cool-Mint {countSites(millpond.mint)}/2</li>
+              </ul>}
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className={cta} onClick={() => engine.startMillpond()}>
+                  {millpond.status === 'active' ? 'Pin next Millpond stop' : 'Start Millpond fieldwork'}
+                </button>
+                {millpondReady(millpond) && <button type="button" className={cta} disabled={!hud.nearExpeditionCamp} onClick={() => engine.finishMillpond()}>
+                  Log restoration at Mailbox Square
+                </button>}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="rounded-lg bg-[#160c24] p-3">
+          <h4 className="font-display text-sm font-black text-[#ffbdac]">Red-Chalk Hollow Storm</h4>
+          {hollow.status === 'restored' ? <p className="mt-1 text-xs text-[#f7efde]">Waterwheel restored. Local exposure is 25% lower and the Supply Relay job is available.</p>
+            : millpond.status !== 'restored' ? <p className="mt-1 text-xs text-[#f7efde]">Restore the Millpond to unlock this expedition.</p>
+            : hollow.status === 'unstarted' ? (
+              <>
+                <p className="my-2 text-xs text-[#f7efde]">Pack Cooling Draughts and Ribbon Stakes. Bring back Chalk-Quartz and escort the stalled companion to shelter.</p>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" className={cta} onClick={() => engine.startHollow('anchor')}>Begin with Camp Anchor</button>
+                  <button type="button" className={cta} onClick={() => engine.startHollow('hauler')}>Begin with Field Hauler</button>
+                </div>
+                <p className="mt-2 text-xs text-[#f7efde]">The Anchor keeps pace and gives a clearer return cue. The Hauler brings an extra ration and takes a more exposed route.</p>
+              </>
+            ) : (
+              <>
+                <ul className="my-2 flex flex-wrap gap-x-3 text-xs font-bold text-[#fff1cf]">
+                  <li>Ribbons {Math.min(2, countSites(hollow.ribbons))}/2</li>
+                  <li>Quartz {countSites(hollow.quartz)}/3 · Banked {hollow.bankedQuartz}/3</li>
+                  <li>{hollow.escorted ? 'Companion safe' : hollow.packed ? 'Escort companion' : 'Find the supply pack'}</li>
+                </ul>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" className={cta} onClick={() => engine.pinExpedition('hollow')}>Pin Hollow route</button>
+                  {hud.nearExpeditionCamp && !hollow.day && <button type="button" className={cta} onClick={() => engine.waitForHollowSquall()}>Wait for the Afternoon Squall</button>}
+                  <button type="button" className={cta} disabled={!hud.nearExpeditionCamp || (hud.inv.chalk_quartz ?? 0) <= 0} onClick={() => engine.bankHollowQuartz()}>Bank Quartz</button>
+                  {hollow.packed && !hollow.escorted && !hollow.sharedDraught && <button type="button" className={cta}
+                    disabled={(hud.inv.cooling_draught ?? 0) <= 0} onClick={() => engine.shareHollowDraught()}>Share Cooling Draught</button>}
+                  {hollowReady(hollow) && <button type="button" className={cta} disabled={!hud.nearExpeditionCamp || (hud.inv.chalk_quartz ?? 0) + hollow.bankedQuartz < 3} onClick={() => engine.finishHollow()}>
+                    Restore the Waterwheel
+                  </button>}
+                </div>
+              </>
+            )}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 export function FieldworkPanel({ hud, engine }: { hud: HudSnapshot; engine: GameEngine }) {
   const camp = hud.fieldwork;
@@ -35,6 +105,22 @@ export function FieldworkPanel({ hud, engine }: { hud: HudSnapshot; engine: Game
           </div>
         </div>
         {hud.weather.sheltered && <p className="mt-2 text-xs font-bold text-[#72efdd]">Camp protection is in range.</p>}
+      </section>
+
+      <ExpeditionNotes hud={hud} engine={engine} />
+
+      <section aria-labelledby="first-fishing-trip" className="rounded-xl border border-[#72efdd]/40 bg-[#122330] p-3 sm:p-4">
+        <h3 id="first-fishing-trip" className="mb-2 flex items-center gap-2 font-display text-lg font-black text-[#72efdd]">
+          <Fish size={18} aria-hidden="true" /> First fishing trip
+        </h3>
+        <p className="text-xs leading-relaxed text-[#f7efde]">
+          {(hud.stats.fishCaught ?? 0) > 0
+            ? 'Catch logged. Bring a fish back to a Camp Table for the ferry supper.'
+            : 'Borrow the reed rod at Delta Public Bank. Wait for HOOK NOW, then reel while the fish is calm.'}
+        </p>
+        <button type="button" className={`${action} mt-3 min-h-11 border-[#72efdd]/50 text-[#72efdd]`} onClick={() => engine.pinFishingBank()}>
+          Pin Delta Public Bank
+        </button>
       </section>
 
       <section aria-labelledby="camp-jobs" className="rounded-xl border border-[#ffd166]/35 bg-[#261734] p-3 sm:p-4">
@@ -74,7 +160,8 @@ export function FieldworkPanel({ hud, engine }: { hud: HudSnapshot; engine: Game
               <select value={companion.job ?? ''} onChange={(event) => engine.setCampJob(companion.id, (event.target.value || null) as CampJob | null)}
                 className="w-full max-w-64 rounded-md border border-[#f7efde]/30 bg-[#160c24] p-2 text-[#f7efde]">
                 <option value="">Travel companion</option>
-                {jobs.map((job) => <option key={job} value={job}>{CAMP_JOBS[job].name}</option>)}
+                {jobs.filter((job) => job !== 'relay' || hud.expeditions.hollow.status === 'restored')
+                  .map((job) => <option key={job} value={job}>{CAMP_JOBS[job].name}</option>)}
               </select>
               {companion.job && <span className="leading-relaxed text-[#f7efde]/75">{CAMP_JOBS[companion.job].description}</span>}
             </label>

@@ -50,7 +50,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'express_delivery',
       name: 'Express Delivery',
-      desc: 'Fires a piercing high-speed parcel that stuns hostiles & rings bells.',
+      desc: 'Fires a piercing parcel for 42 damage. Each enemy hit is stunned for 1.6 seconds.',
       cd: 5.5,
     },
     startInv: {
@@ -85,7 +85,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'spill_tea',
       name: 'Spill the Tea',
-      desc: 'Splashes gossiping tea, healing Vibe & forcing nearby foes to dance.',
+      desc: 'Restores 18 Vibe and freezes creatures within 235 paces for 2.6 seconds.',
       cd: 7.5,
     },
     startInv: {
@@ -118,7 +118,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'drop_bass',
       name: 'Drop the Bass',
-      desc: 'Emits a sub-bass wave that surges crops & stuns creatures in groove.',
+      desc: 'Freezes creatures for 2.2 seconds and gives crops within 275 paces 9 growth.',
       cd: 8.5,
     },
     startInv: {
@@ -152,7 +152,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'audit',
       name: 'Surprise Audit',
-      desc: 'Stamps a red audit seal freezing nearby foes & shredding Boss HP.',
+      desc: 'Holds nearby enemies for 4.5 seconds and deals 45 damage to bosses in range.',
       cd: 9.5,
     },
     startInv: {
@@ -184,7 +184,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'fold_span',
       name: 'Fold Span',
-      desc: 'Unfolds a crisp pleated bridge forward, surging speed & ignoring water/mud for 6s.',
+      desc: 'For six seconds, increases speed by 32% and keeps your footing in mud and shallow water.',
       cd: 6.5,
     },
     startInv: {
@@ -217,7 +217,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'guide_line',
       name: 'Guide Line',
-      desc: 'Casts a taut line pulse that reveals nearby shoals, slows foes & steadies tension.',
+      desc: 'Reveals crystals and supports fishing for 10 seconds. Snags nearby hostiles for 2.6 seconds.',
       cd: 6.0,
     },
     startInv: {
@@ -251,7 +251,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'lend_glow',
       name: 'Lend Glow',
-      desc: 'Leaves a glowing ember pulse that warms crops, lights night fog & restores nearby Vibe.',
+      desc: 'Restores 16 Vibe, removes 14 Wobble, and leaves an eight-second light that warms crops and shelters the area.',
       cd: 7.0,
     },
     startInv: {
@@ -284,7 +284,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'high_water_mark',
       name: 'High-Water Mark',
-      desc: 'Brushes an iridescent waterline that reveals hidden crystals & stalls approaching foes.',
+      desc: 'Reveals crystals and keeps your footing in ink for 5.5 seconds. Freezes nearby hostiles for 3.2 seconds.',
       cd: 6.5,
     },
     startInv: {
@@ -316,7 +316,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'wall_tap',
       name: 'Wall Tap',
-      desc: 'Sends a resonant acoustic ring that chimes nearby props, pacifies critters & boosts crops.',
+      desc: 'Freezes creatures for 2.6 seconds and gives nearby crops 8 growth. Earn Acoustics practice in the caverns.',
       cd: 6.0,
     },
     startInv: {
@@ -347,7 +347,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'steam_vent',
       name: 'Steam Vent',
-      desc: 'Vents a cozy brass whistle cloud that warms Vibe, knocks back hostiles & speeds cooking.',
+      desc: 'Restores 20 Vibe and pushes nearby hostiles away. Press C within 10 seconds to cook with the vent.',
       cd: 7.5,
     },
     startInv: {
@@ -379,7 +379,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'split_sunbeam',
       name: 'Split Sunbeam',
-      desc: 'Refracts a rainbow sunbeam that surges nearby Mood Soil crops & charms creatures.',
+      desc: 'Fires a 46-damage beam, reveals crystals for eight seconds, and gives nearby crops 6 growth.',
       cd: 6.5,
     },
     startInv: {
@@ -411,7 +411,7 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
     ability: {
       id: 'reed_float',
       name: 'Reed Float',
-      desc: 'Inflates a buoyant bladderwort raft for 7s of nimble glide speed & mud/water immunity.',
+      desc: 'Glide over mud and shallow water for 6.5 seconds. Restore 10 Vibe and 12 Munch on launch.',
       cd: 6.5,
     },
     startInv: {
@@ -564,7 +564,7 @@ export const ITEMS: Record<string, ItemDef> = {
     mun: 15,
     vib: 5,
     quote: 'WHOA! The trees have opinions!',
-    desc: 'Prismatic Wobble Vision: reveals Cosmic Crystals & ink ghost traces.',
+    desc: 'Reveals Cosmic Crystals and slightly increases movement speed.',
   },
   cloud_puff: {
     id: 'cloud_puff',
@@ -616,7 +616,7 @@ export const ITEMS: Record<string, ItemDef> = {
     mun: 20,
     vib: 12,
     quote: 'That tree just gave me tax advice!',
-    desc: 'Starfield veil, hidden crystals & surreal flora prophecies.',
+    desc: 'Reveals hidden crystals and slightly slows foes.',
   },
   grounding_salt: {
     id: 'grounding_salt',
@@ -642,7 +642,7 @@ export const ITEMS: Record<string, ItemDef> = {
     mun: 35,
     vib: 28,
     quote: 'MAXIMUM BOOGIE ACHIEVED!',
-    desc: 'Blender Combo: rotating club spotlights, super speed & shields against Bad Trips.',
+    desc: 'Boosts speed and helps prevent a Bad Trip.',
   },
   prism_absinthe: {
     id: 'prism_absinthe',
@@ -655,7 +655,7 @@ export const ITEMS: Record<string, ItemDef> = {
     mun: 6,
     vib: 8,
     quote: 'Every leaf split into seven rainbows!',
-    desc: 'Optical Fracture: RGB chromatic lens split, floating prism facets & crystal sight.',
+    desc: 'Reveals Cosmic Crystals and increases movement speed.',
   },
   velvet_spores: {
     id: 'velvet_spores',
@@ -668,7 +668,7 @@ export const ITEMS: Record<string, ItemDef> = {
     mun: 10,
     vib: -26,
     quote: 'The shadows are breathing in three-quarter time...',
-    desc: 'Deep Wax Haze (+46 Wobble, -26 Vibe): melting wax curtains & night aura. Careful—low Vibe triggers a Bad Trip!',
+    desc: 'Widens night sight and grants +46 Wobble at the cost of 26 Vibe. Low Vibe can trigger a Bad Trip.',
   },
 
   // Materials & Rare
@@ -940,6 +940,52 @@ export const ITEMS: Record<string, ItemDef> = {
     mun: 18,
     vib: 10,
     desc: 'Common Delta dock fish that noses pilings twice before diving. Best simmered into Chowder!',
+  },
+  reed_perch: {
+    id: 'reed_perch',
+    name: 'Reed Perch',
+    cat: 'mat',
+    accent: '#72efdd',
+    desc: 'A catch from the Singing Millpond. Log it in the Camp Ledger or release it for Field Botany practice.',
+  },
+  cool_mint: {
+    id: 'cool_mint',
+    name: 'Cool-Mint',
+    cat: 'food',
+    accent: '#a7dbab',
+    vib: 12,
+    wob: -14,
+    desc: 'Chew a sprig for 12 Vibe and 14 less Wobble, or save it for a Cooling Draught.',
+  },
+  cooling_draught: {
+    id: 'cooling_draught',
+    name: 'Cooling Draught',
+    cat: 'food',
+    accent: '#72efdd',
+    vib: 25,
+    wob: -24,
+    desc: 'Restores 25 Vibe and removes 24 Wobble. Share one with the stalled companion in Red-Chalk Hollow to speed the escort.',
+  },
+  ribbon_stake: {
+    id: 'ribbon_stake',
+    name: 'Ribbon Stake',
+    cat: 'tool',
+    accent: '#fff1bb',
+    desc: 'Tie at a marked fork to leave a trail visible through the squall.',
+  },
+  chalk_quartz: {
+    id: 'chalk_quartz',
+    name: 'Chalk-Quartz',
+    cat: 'mat',
+    accent: '#f4b8aa',
+    desc: 'Rose-colored stone used to restore the Hollow Waterwheel.',
+  },
+  hollow_waterwheel_plan: {
+    id: 'hollow_waterwheel_plan',
+    name: 'Hollow Waterwheel Blueprint',
+    cat: 'quest',
+    accent: '#ffd166',
+    desc: 'The finished plan for the Hollow Waterwheel. Local exposure is 25% lower once restored.',
   },
   mirror_minnow: {
     id: 'mirror_minnow',
@@ -1428,6 +1474,25 @@ export const CROPS: Record<CropId, CropDef> = {
 
 export const RECIPES: RecipeDef[] = [
   {
+    id: 'ribbon_stake_bundle',
+    name: 'Ribbon Stakes ×3',
+    type: 'blend',
+    fieldCraft: true,
+    cost: { rubber_wood: 1 },
+    out: { ribbon_stake: 3 },
+    desc: 'Tie bright linen to timber to mark a field route.',
+  },
+  {
+    id: 'cool_mint_brew',
+    name: 'Cool-Mint Brew ×2',
+    type: 'blend',
+    fieldCraft: true,
+    requiresMillpond: true,
+    cost: { cool_mint: 1, fizz_berry: 1 },
+    out: { cooling_draught: 2 },
+    desc: 'Brew two Cooling Draughts from one Cool-Mint sprig and a Fizz Berry.',
+  },
+  {
     id: 'camp_table',
     name: 'Camp Supper Table',
     type: 'place',
@@ -1596,7 +1661,7 @@ export const RECIPES: RecipeDef[] = [
     type: 'blend',
     out: { prism_absinthe: 1 },
     cost: { lens_pear: 1, cosmic_crystal: 1 },
-    desc: 'Blender Brew: Optical RGB fracture, rainbow prism facets & crystal vision.',
+    desc: 'Blender brew for seeing Cosmic Crystals and moving faster.',
   },
   {
     id: 'velvet_spores',
@@ -1604,7 +1669,7 @@ export const RECIPES: RecipeDef[] = [
     type: 'blend',
     out: { velvet_spores: 2 },
     cost: { void_cocoa: 1, shroom: 1 },
-    desc: 'Blender Brew: Deep melting wax haze (+46 Wobble, -26 Vibe). Watch your Vibe!',
+    desc: 'Blender brew that widens night sight, adds 46 Wobble, and costs 26 Vibe.',
   },
   {
     id: 'bell_lure_craft',
